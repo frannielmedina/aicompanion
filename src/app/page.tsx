@@ -14,7 +14,7 @@ const GamingModeView = dynamic(() => import('@/components/ui/GamingMode'), { ssr
 
 function TwitchInit() { useTwitchChat(); return null; }
 
-const HIDE_DELAY = 3000; // ms of inactivity before UI hides
+const HIDE_DELAY = 3000;
 
 export default function Home() {
   const { settings, chatPanelVisible } = useStore();
@@ -29,7 +29,6 @@ export default function Home() {
     hideTimer.current = setTimeout(() => setUiVisible(false), HIDE_DELAY);
   }, []);
 
-  // Start hide timer on mount
   useEffect(() => {
     hideTimer.current = setTimeout(() => setUiVisible(false), HIDE_DELAY);
     return () => { if (hideTimer.current) clearTimeout(hideTimer.current); };
@@ -48,20 +47,21 @@ export default function Home() {
     >
       <TwitchInit />
 
-      {/* TopBar — slides up when hidden */}
+      {/* TopBar — fixed overlay at top, slides up when inactive */}
       <div
-        className="flex-shrink-0 transition-transform duration-300 ease-in-out"
+        className="fixed top-0 left-0 right-0 z-50 transition-transform duration-300 ease-in-out"
         style={{ transform: uiVisible ? 'translateY(0)' : 'translateY(-100%)' }}
       >
         <TopBar uiVisible={uiVisible} />
       </div>
 
-      <div className="flex flex-1 overflow-hidden relative">
+      {/* Full-screen content — no top padding, topbar overlays */}
+      <div className="flex flex-1 h-full overflow-hidden">
         {settings.gaming.enabled ? (
           <GamingModeView />
         ) : (
           <>
-            {/* VTuber Stage — always full area */}
+            {/* VTuber Stage — always fills all available space */}
             <div className="relative flex-1 overflow-hidden" style={{ background: stageBg }}>
               <VTuberCanvas className="w-full h-full" />
               <CaptionDisplay />
@@ -69,7 +69,7 @@ export default function Home() {
               <EmoteWall />
             </div>
 
-            {/* Chat Panel — slides in from the right */}
+            {/* Chat Panel — slides in/out from right */}
             <div
               className="flex-shrink-0 overflow-hidden transition-all duration-300 ease-in-out"
               style={{ width: chatPanelVisible ? '320px' : '0px' }}
