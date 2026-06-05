@@ -42,6 +42,12 @@ export interface GamingModeConfig {
   characterPosition: 'bottom-left' | 'bottom-right' | 'top-left' | 'top-right';
 }
 
+export interface CaptionConfig {
+  color: string;
+  font: FontOption;
+  size: 'sm' | 'base' | 'lg' | 'xl' | '2xl';
+}
+
 export interface Settings {
   font: FontOption;
   language: Language;
@@ -53,6 +59,9 @@ export interface Settings {
   vtuberName: string;
   systemPrompt: string;
   greenScreenColor: string;
+  customVrmUrl?: string;
+  customVrmName?: string;
+  caption?: CaptionConfig;
 }
 
 interface AppState {
@@ -100,6 +109,13 @@ const defaultSettings: Settings = {
   vtuberName: 'Ai-Chan',
   systemPrompt: 'You are Ai-Chan, a friendly and cheerful AI VTuber. Be energetic, fun, and engaging!',
   greenScreenColor: '#00ff00',
+  customVrmUrl: '',
+  customVrmName: '',
+  caption: {
+    color: '#ffffff',
+    font: 'comic',
+    size: 'base',
+  },
   llm: {
     provider: 'groq',
     model: 'llama3-70b-8192',
