@@ -5,28 +5,53 @@ import { FONT_MAP } from '@/lib/fonts';
 export default function CaptionDisplay() {
   const { currentCaption, isSpeaking, isThinking, settings } = useStore();
 
-  if (!currentCaption && !isThinking) return null;
+  // Only show when speaking or when there's a caption (not during "thinking")
+  if (!currentCaption && !isSpeaking) return null;
+  if (!currentCaption) return null;
 
-  const fontFamily = FONT_MAP[settings.font];
+  // Caption settings with fallbacks
+  const captionFont = settings.caption?.font
+    ? FONT_MAP[settings.caption.font as keyof typeof FONT_MAP] ?? FONT_MAP[settings.font]
+    : FONT_MAP[settings.font];
+  const captionColor = settings.caption?.color ?? '#ffffff';
+  const captionSize = settings.caption?.size ?? 'base';
+
+  const sizeMap: Record<string, string> = {
+    sm: '0.875rem',
+    base: '1rem',
+    lg: '1.125rem',
+    xl: '1.25rem',
+    '2xl': '1.5rem',
+  };
+  const fontSize = sizeMap[captionSize] ?? '1rem';
+
+  const textShadow =
+    '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, ' +
+    '-2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, ' +
+    '0 0 8px rgba(0,0,0,0.9)';
 
   return (
     <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-full max-w-2xl px-6 z-30 pointer-events-none">
-      <div className="bg-black/75 backdrop-blur-md border border-white/20 rounded-2xl px-6 py-3 text-center shadow-2xl">
-        {isThinking && !currentCaption ? (
-          <div className="flex items-center justify-center gap-2">
-            <div className="flex gap-1">
-              {[0, 1, 2].map((i) => (
-                <div key={i} className="w-2 h-2 rounded-full bg-accent-secondary animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
-              ))}
-            </div>
-            <span className="text-gray-400 text-sm" style={{ fontFamily }}>Thinking...</span>
-          </div>
-        ) : (
-          <p className="text-white text-base leading-relaxed" style={{ fontFamily, textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>
-            {isSpeaking && <span className="inline-block w-2 h-4 bg-accent-secondary rounded-sm mr-2 animate-pulse align-middle" />}
-            {currentCaption}
-          </p>
-        )}
+      <div className="text-center">
+        <p
+          style={{
+            fontFamily: captionFont,
+            color: captionColor,
+            fontSize,
+            textShadow,
+            lineHeight: 1.5,
+            fontWeight: 700,
+          }}
+          className="leading-relaxed"
+        >
+          {isSpeaking && (
+            <span
+              className="inline-block w-2 h-4 rounded-sm mr-2 animate-pulse align-middle"
+              style={{ background: captionColor }}
+            />
+          )}
+          {currentCaption}
+        </p>
       </div>
     </div>
   );

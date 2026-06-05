@@ -14,23 +14,19 @@ export default function VTuberCanvas({ className }: { className?: string }) {
   const [loadStatus, setLoadStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [loadProgress, setLoadProgress] = useState(0);
 
-  // Keep state ref in sync for animation loop
   useEffect(() => { stateRef.current = { isSpeaking, isThinking }; }, [isSpeaking, isThinking]);
 
   useEffect(() => {
     if (!mountRef.current) return;
     const el = mountRef.current;
 
-    // Scene
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(settings.greenScreenColor);
 
-    // Camera
     const camera = new THREE.PerspectiveCamera(30, el.clientWidth / el.clientHeight, 0.1, 20);
     camera.position.set(0, 1.4, 2.8);
     camera.lookAt(0, 1.2, 0);
 
-    // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(el.clientWidth, el.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -38,7 +34,6 @@ export default function VTuberCanvas({ className }: { className?: string }) {
     renderer.shadowMap.enabled = true;
     el.appendChild(renderer.domElement);
 
-    // Lights
     const ambient = new THREE.AmbientLight(0xffffff, 0.8);
     scene.add(ambient);
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -51,10 +46,9 @@ export default function VTuberCanvas({ className }: { className?: string }) {
     rimLight.position.set(0, 2, -1);
     scene.add(rimLight);
 
-    // Animation state
     const anim = {
       blinkTimer: 0,
-      blinkPhase: 0 as number, // 0=open, 1=closing, 2=opening
+      blinkPhase: 0 as number,
       floatTimer: 0,
       mouthTimer: 0,
       breathTimer: 0,
@@ -62,26 +56,28 @@ export default function VTuberCanvas({ className }: { className?: string }) {
       tailTimer: 0,
     };
 
-    // Load VRM
+    // Determine VRM source: custom upload or default
+    const vrmUrl = settings.customVrmUrl || '/vrm/miko.vrm';
+
     const loader = new GLTFLoader();
     loader.register((parser) => new VRMLoaderPlugin(parser));
 
     loader.load(
-      '/vrm/miko.vrm',
+      vrmUrl,
       (gltf) => {
         const vrm = gltf.userData.vrm;
         if (!vrm) { setLoadStatus('error'); return; }
-
         VRMUtils.removeUnnecessaryVertices(gltf.scene);
         VRMUtils.combineSkeletons(gltf.scene);
-
-        vrm.scene.rotation.y = 0; // face camera
+        vrm.scene.rotation.y = 0;
         scene.add(vrm.scene);
         vrmRef.current = vrm;
         setLoadStatus('ready');
       },
       (progress) => {
-        setLoadProgress(Math.round((progress.loaded / progress.total) * 100));
+        if (progress.total > 0) {
+          setLoadProgress(Math.round((progress.loaded / progress.total) * 100));
+        }
       },
       (error) => {
         console.error('VRM load error:', error);
@@ -89,7 +85,6 @@ export default function VTuberCanvas({ className }: { className?: string }) {
       }
     );
 
-    // Animation loop
     let animId: number;
     const animate = () => {
       animId = requestAnimationFrame(animate);
@@ -108,12 +103,9 @@ export default function VTuberCanvas({ className }: { className?: string }) {
       const eb = vrm.expressionManager;
       const hb = vrm.humanoid;
 
-      // --- FLOATING / BREATHING ---
       const floatY = Math.sin(anim.floatTimer * 1.1) * 0.025;
-      const breathScale = 1 + Math.sin(anim.breathTimer * 0.9) * 0.004;
       vrm.scene.position.y = floatY;
 
-      // --- HEAD SWAY (idle or thinking tilt) ---
       const headBone = hb?.getNormalizedBoneNode(VRMHumanBoneName.Head);
       if (headBone) {
         const targetZ = isThinking ? 0.18 : Math.sin(anim.headSwayTimer * 0.45) * 0.04;
@@ -124,19 +116,16 @@ export default function VTuberCanvas({ className }: { className?: string }) {
         headBone.rotation.y += (targetY - headBone.rotation.y) * 0.06;
       }
 
-      // --- NECK subtle sway ---
       const neckBone = hb?.getNormalizedBoneNode(VRMHumanBoneName.Neck);
       if (neckBone) {
         neckBone.rotation.z = Math.sin(anim.headSwayTimer * 0.4) * 0.015;
       }
 
-      // --- SPINE breathing ---
       const spineBone = hb?.getNormalizedBoneNode(VRMHumanBoneName.Spine);
       if (spineBone) {
         spineBone.rotation.x = Math.sin(anim.breathTimer * 0.9) * 0.012;
       }
 
-      // --- ARM SWAY ---
       const leftUpperArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftUpperArm);
       const rightUpperArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightUpperArm);
       if (leftUpperArm) {
@@ -148,7 +137,6 @@ export default function VTuberCanvas({ className }: { className?: string }) {
         rightUpperArm.rotation.x = Math.sin(anim.floatTimer * 0.6 + 0.5) * 0.02;
       }
 
-      // --- BLINK ---
       if (eb) {
         if (anim.blinkTimer > 3.5 + Math.random() * 2.5 && anim.blinkPhase === 0) {
           anim.blinkPhase = 1;
@@ -164,33 +152,23 @@ export default function VTuberCanvas({ className }: { className?: string }) {
           if (v <= 0) { anim.blinkPhase = 0; anim.blinkTimer = 0; }
         }
 
-        // --- LIP SYNC ---
         if (isSpeaking) {
-          // Cycle through vowel visemes for natural speech look
           const t = anim.mouthTimer;
-          const cycle = t % 0.22;
           const phase = (t * 4.5) % (Math.PI * 2);
           const openAmount = (Math.sin(phase) * 0.5 + 0.5) * 0.85;
-
-          // Pick viseme based on time position
           const visemeIdx = Math.floor(t * 3.5) % 5;
           const visemes = ['aa', 'ih', 'ou', 'ee', 'oh'];
-          // Clear all mouth shapes first
           ['aa', 'ih', 'ou', 'ee', 'oh', 'nn'].forEach((v) => {
             try { eb.setValue(v, 0); } catch {}
           });
           try { eb.setValue(visemes[visemeIdx], openAmount); } catch {}
-
-          // Fallback: try 'a' / 'i' / 'u' style names
           try { eb.setValue('happy', Math.sin(t * 2) * 0.1 + 0.1); } catch {}
         } else {
-          // Close mouth
           ['aa', 'ih', 'ou', 'ee', 'oh', 'nn', 'a', 'i', 'u', 'e', 'o'].forEach((v) => {
             try { eb.setValue(v, 0); } catch {}
           });
         }
 
-        // --- THINKING expression ---
         if (isThinking) {
           try { eb.setValue('thinking', Math.min(1, anim.headSwayTimer * 2)); } catch {}
         } else {
@@ -203,7 +181,6 @@ export default function VTuberCanvas({ className }: { className?: string }) {
     };
     animate();
 
-    // Resize
     const onResize = () => {
       if (!el) return;
       camera.aspect = el.clientWidth / el.clientHeight;
@@ -218,18 +195,17 @@ export default function VTuberCanvas({ className }: { className?: string }) {
       renderer.dispose();
       if (el.contains(renderer.domElement)) el.removeChild(renderer.domElement);
     };
-  }, [settings.greenScreenColor]);
+  }, [settings.greenScreenColor, settings.customVrmUrl]);
 
   return (
     <div className={className} style={{ position: 'relative' }}>
       <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
 
-      {/* Loading overlay */}
       {loadStatus === 'loading' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-dark-900/90 z-10">
           <div className="text-4xl mb-4 animate-bounce">🌸</div>
           <p className="text-white font-bold mb-3" style={{ fontFamily: '"Comic Sans MS", cursive' }}>
-            Loading Miko...
+            Loading...
           </p>
           <div className="w-48 h-2 bg-dark-600 rounded-full overflow-hidden">
             <div
@@ -244,7 +220,7 @@ export default function VTuberCanvas({ className }: { className?: string }) {
       {loadStatus === 'error' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-dark-900/90 z-10">
           <p className="text-red-400 text-lg mb-2">⚠️ Failed to load VRM</p>
-          <p className="text-gray-400 text-sm">Check that miko.vrm is in /public/vrm/</p>
+          <p className="text-gray-400 text-sm">Check that a VRM file is available</p>
         </div>
       )}
     </div>
