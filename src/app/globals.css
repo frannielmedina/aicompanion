@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-comic: "Comic Sans MS", "Comic Sans", cursive;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; overflow: hidden; }
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: #111118; }
+::-webkit-scrollbar-thumb { background: #2d2d3d; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #7c3aed; }
+
+/* Range input */
+input[type='range'] {
+  -webkit-appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: #2d2d3d;
+  outline: none;
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #7c3aed;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+input[type='range']::-webkit-slider-thumb:hover { background: #a855f7; }
+
+/* Three.js canvas */
+canvas { display: block; }
