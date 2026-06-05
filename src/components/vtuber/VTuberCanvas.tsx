@@ -75,7 +75,7 @@ export default function VTuberCanvas({ className }: { className?: string }) {
         VRMUtils.removeUnnecessaryVertices(gltf.scene);
         VRMUtils.combineSkeletons(gltf.scene);
 
-        vrm.scene.rotation.y = Math.PI; // face camera
+        vrm.scene.rotation.y = 0; // face camera
         scene.add(vrm.scene);
         vrmRef.current = vrm;
         setLoadStatus('ready');
