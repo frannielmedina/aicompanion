@@ -48,6 +48,17 @@ export interface CaptionConfig {
   size: 'sm' | 'base' | 'lg' | 'xl' | '2xl';
 }
 
+export interface VisionConfig {
+  enabled: boolean;
+  provider: string;
+  model: string;
+  apiKey: string;
+  customEndpoint?: string;
+  intervalSeconds: number;
+  systemPrompt: string;
+  passToMainLLM: boolean;
+}
+
 export interface Settings {
   font: FontOption;
   language: Language;
@@ -63,6 +74,7 @@ export interface Settings {
   customVrmName?: string;
   caption?: CaptionConfig;
   customBgDataUrl?: string;
+  vision: VisionConfig;
 }
 
 interface AppState {
@@ -75,6 +87,7 @@ interface AppState {
   twitchMessages: TwitchMessage[];
   emoteWall: EmoteParticle[];
   chatPanelVisible: boolean;
+  lastVisionDescription: string;
   setSettings: (s: Partial<Settings>) => void;
   setSettingsOpen: (v: boolean) => void;
   setIsSpeaking: (v: boolean) => void;
@@ -86,6 +99,7 @@ interface AppState {
   addEmote: (e: EmoteParticle) => void;
   removeEmote: (id: string) => void;
   setChatPanelVisible: (v: boolean) => void;
+  setLastVisionDescription: (v: string) => void;
 }
 
 export interface TwitchMessage {
@@ -146,6 +160,15 @@ const defaultSettings: Settings = {
     vdoCode: '',
     characterPosition: 'bottom-right',
   },
+  vision: {
+    enabled: false,
+    provider: 'groq',
+    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+    apiKey: '',
+    intervalSeconds: 15,
+    systemPrompt: 'You are a vision AI that briefly describes what is happening on a game stream screen. Be concise (1-2 sentences). Focus on the game action, score, or key events visible.',
+    passToMainLLM: true,
+  },
 };
 
 export const useStore = create<AppState>()(
@@ -160,6 +183,7 @@ export const useStore = create<AppState>()(
       twitchMessages: [],
       emoteWall: [],
       chatPanelVisible: true,
+      lastVisionDescription: '',
       setSettings: (s) => set((state) => ({ settings: { ...state.settings, ...s } })),
       setSettingsOpen: (v) => set({ settingsOpen: v }),
       setIsSpeaking: (v) => set({ isSpeaking: v }),
@@ -173,6 +197,7 @@ export const useStore = create<AppState>()(
       addEmote: (e) => set((state) => ({ emoteWall: [...state.emoteWall, e] })),
       removeEmote: (id) => set((state) => ({ emoteWall: state.emoteWall.filter((e) => e.id !== id) })),
       setChatPanelVisible: (v) => set({ chatPanelVisible: v }),
+      setLastVisionDescription: (v) => set({ lastVisionDescription: v }),
     }),
     { name: 'ai-companion-settings', partialize: (s) => ({ settings: s.settings }) }
   )
