@@ -24,34 +24,50 @@ export function useVision({ videoRef, iframeRef }: VisionHookOptions) {
     setIsThinking,
     setCurrentCaption,
     addChat,
-    chatHistory,
-    isSpeaking,
-    isThinking,
   } = useStore();
 
-  const { vision, llm, tts, systemPrompt } = settings;
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Use refs for fast-changing state to avoid stale closures in the interval
   const busyRef = useRef(false);
+  const isSpeakingRef = useRef(false);
+  const isThinkingRef = useRef(false);
+  const chatHistoryRef = useRef(useStore.getState().chatHistory);
+  const settingsRef = useRef(settings);
+
+  // Keep refs up to date
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
+
+  useEffect(() => {
+    return useStore.subscribe((state) => {
+      isSpeakingRef.current = state.isSpeaking;
+      isThinkingRef.current = state.isThinking;
+      chatHistoryRef.current = state.chatHistory;
+    });
+  }, []);
 
   const runVisionCycle = useCallback(async () => {
-    if (busyRef.current || isSpeaking || isThinking) return;
-    if (!vision.enabled || !vision.apiKey) return;
+    if (busyRef.current) return;
+    if (isSpeakingRef.current || isThinkingRef.current) return;
+
+    const s = settingsRef.current;
+    if (!s.vision.enabled || !s.gaming.enabled) return;
+    if (!s.vision.apiKey) return;
 
     busyRef.current = true;
 
     try {
-      // 1. Capture frame
+      // 1. Capture frame from video or iframe
       const imageB64 = await captureFrame(
         videoRef.current ?? null,
         iframeRef.current ?? null,
       );
+
       if (!imageB64) {
         busyRef.current = false;
         return;
       }
 
       // 2. Vision LLM → short description
-      const description = await callVisionLLM(vision, imageB64);
+      const description = await callVisionLLM(s.vision, imageB64);
       if (!description.trim()) {
         busyRef.current = false;
         return;
@@ -60,20 +76,17 @@ export function useVision({ videoRef, iframeRef }: VisionHookOptions) {
       setLastVisionDescription(description);
 
       // 3. Pass description to main LLM (if enabled)
-      if (vision.passToMainLLM) {
+      if (s.vision.passToMainLLM) {
         const visionContext = `[Game screen description: ${description}]`;
-        const syntheticUserMsg = {
-          role: 'user' as const,
-          content: visionContext,
-        };
+        const syntheticUserMsg = { role: 'user' as const, content: visionContext };
 
         setIsThinking(true);
         setCurrentCaption('');
 
         const raw = await callLLM(
-          llm,
-          [...chatHistory, syntheticUserMsg],
-          systemPrompt,
+          s.llm,
+          [...chatHistoryRef.current, syntheticUserMsg],
+          s.systemPrompt,
         );
         const response = stripThinkTags(raw);
 
@@ -83,10 +96,10 @@ export function useVision({ videoRef, iframeRef }: VisionHookOptions) {
         setCurrentCaption(response);
 
         // 4. TTS
-        if (tts.apiKey || tts.provider === 'voicevox' || tts.provider === 'aivis' || tts.email) {
+        if (s.tts.apiKey || s.tts.provider === 'voicevox' || s.tts.provider === 'aivis' || s.tts.email) {
           setIsSpeaking(true);
           try {
-            const audio = await synthesizeSpeech(tts, response);
+            const audio = await synthesizeSpeech(s.tts, response);
             if (audio) await playAudioBuffer(audio);
           } catch (e) {
             console.error('Vision TTS error:', e);
@@ -98,22 +111,29 @@ export function useVision({ videoRef, iframeRef }: VisionHookOptions) {
       }
     } catch (e) {
       console.error('Vision cycle error:', e);
+      setIsThinking(false);
+      setIsSpeaking(false);
     }
 
     busyRef.current = false;
-  }, [vision, llm, tts, systemPrompt, chatHistory, isSpeaking, isThinking]);
+  }, [addChat, setIsSpeaking, setIsThinking, setCurrentCaption, setLastVisionDescription, videoRef, iframeRef]);
 
   useEffect(() => {
-    if (!vision.enabled || !settings.gaming.enabled) {
-      if (timerRef.current) clearInterval(timerRef.current);
+    const { vision, gaming } = settings;
+
+    if (!vision.enabled || !gaming.enabled) {
       return;
     }
 
     const intervalMs = Math.max(5, vision.intervalSeconds) * 1000;
-    timerRef.current = setInterval(runVisionCycle, intervalMs);
+
+    // Run immediately on mount so we don't wait the full interval first
+    const firstRun = setTimeout(() => { runVisionCycle(); }, 2000);
+    const interval = setInterval(runVisionCycle, intervalMs);
 
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      clearTimeout(firstRun);
+      clearInterval(interval);
     };
-  }, [vision.enabled, vision.intervalSeconds, settings.gaming.enabled, runVisionCycle]);
+  }, [settings.vision.enabled, settings.vision.intervalSeconds, settings.gaming.enabled, runVisionCycle]);
 }
