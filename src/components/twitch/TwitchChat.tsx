@@ -1,11 +1,92 @@
 'use client';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { useStore, type TwitchMessage, type EmoteParticle } from '@/store';
+import { callLLM } from '@/lib/llm';
+import { synthesizeSpeech, playAudioBuffer } from '@/lib/tts';
+
+function stripThinkTags(text: string): string {
+  let result = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  result = result.replace(/<think>[\s\S]*/gi, '');
+  return result.trim();
+}
 
 // Twitch chat via WebSocket without tmi.js (avoids SSR issues)
 export function useTwitchChat() {
-  const { settings, addTwitchMessage, addEmote, removeEmote } = useStore();
+  const {
+    settings,
+    addTwitchMessage,
+    addEmote,
+    removeEmote,
+    addChat,
+    setIsSpeaking,
+    setIsThinking,
+    setCurrentCaption,
+    chatHistory,
+    isSpeaking,
+    isThinking,
+  } = useStore();
+
   const wsRef = useRef<WebSocket | null>(null);
+  const busyRef = useRef(false);
+
+  // Keep a ref to the latest state so our message handler never uses stale closures
+  const stateRef = useRef({ isSpeaking, isThinking, chatHistory });
+  useEffect(() => {
+    stateRef.current = { isSpeaking, isThinking, chatHistory };
+  }, [isSpeaking, isThinking, chatHistory]);
+
+  const settingsRef = useRef(settings);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
+
+  // Handler that sends a twitch message to the LLM and speaks the response
+  const handleAIResponse = useCallback(async (twitchMsg: TwitchMessage) => {
+    if (busyRef.current) return;
+    if (stateRef.current.isSpeaking || stateRef.current.isThinking) return;
+
+    const s = settingsRef.current;
+    // Only respond if an LLM key is configured
+    if (!s.llm.apiKey && s.llm.provider !== 'localllama') return;
+
+    busyRef.current = true;
+
+    const userContent = `[Twitch chat from ${twitchMsg.username}]: ${twitchMsg.message}`;
+    const syntheticMsg = { role: 'user' as const, content: userContent };
+
+    try {
+      setIsThinking(true);
+      setCurrentCaption('');
+
+      const raw = await callLLM(
+        s.llm,
+        [...stateRef.current.chatHistory, syntheticMsg],
+        s.systemPrompt,
+      );
+      const response = stripThinkTags(raw);
+
+      addChat({ role: 'user', content: userContent });
+      addChat({ role: 'assistant', content: response });
+      setIsThinking(false);
+      setCurrentCaption(response);
+
+      if (s.tts.apiKey || s.tts.provider === 'voicevox' || s.tts.provider === 'aivis' || s.tts.email) {
+        setIsSpeaking(true);
+        try {
+          const audio = await synthesizeSpeech(s.tts, response);
+          if (audio) await playAudioBuffer(audio);
+        } catch (e) {
+          console.error('Twitch TTS error:', e);
+        }
+        setIsSpeaking(false);
+      }
+
+      setTimeout(() => setCurrentCaption(''), 8000);
+    } catch (e) {
+      console.error('Twitch AI response error:', e);
+      setIsThinking(false);
+    }
+
+    busyRef.current = false;
+  }, [addChat, setIsSpeaking, setIsThinking, setCurrentCaption]);
 
   useEffect(() => {
     if (!settings.twitch.enabled || !settings.twitch.channelName) return;
@@ -16,8 +97,11 @@ export function useTwitchChat() {
 
     ws.onopen = () => {
       ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership');
-      if (settings.twitch.accessToken) {
-        ws.send(`PASS ${settings.twitch.accessToken}`);
+      // OAuth is optional — use anonymous if not provided
+      if (settings.twitch.accessToken && settings.twitch.accessToken.trim()) {
+        const token = settings.twitch.accessToken.trim();
+        const oauthToken = token.startsWith('oauth:') ? token : `oauth:${token}`;
+        ws.send(`PASS ${oauthToken}`);
         ws.send(`NICK ${channel}`);
       } else {
         ws.send('PASS SCHMOOPIIE');
@@ -32,20 +116,36 @@ export function useTwitchChat() {
 
       const lines = raw.split('\r\n').filter(Boolean);
       for (const line of lines) {
-        parseTwitchMessage(line, addTwitchMessage, addEmote, removeEmote);
+        const msg = parseTwitchMessage(line, addTwitchMessage, addEmote, removeEmote);
+        // If the settings say to let the AI respond to chat, trigger response
+        if (msg && settings.twitch.aiRespondsToChat) {
+          handleAIResponse(msg);
+        }
       }
     };
 
+    ws.onerror = (e) => console.error('Twitch WS error:', e);
+
     return () => { ws.close(); };
-  }, [settings.twitch.enabled, settings.twitch.channelName, settings.twitch.accessToken]);
+  }, [
+    settings.twitch.enabled,
+    settings.twitch.channelName,
+    settings.twitch.accessToken,
+    settings.twitch.aiRespondsToChat,
+    addTwitchMessage,
+    addEmote,
+    removeEmote,
+    handleAIResponse,
+  ]);
 }
 
+// Returns the parsed TwitchMessage so callers can use it, or null if not a PRIVMSG
 function parseTwitchMessage(
   line: string,
   addMsg: (m: TwitchMessage) => void,
   addEmote: (e: EmoteParticle) => void,
   removeEmote: (id: string) => void,
-) {
+): TwitchMessage | null {
   // Parse IRC tags
   const tagMatch = line.match(/^@([^ ]+)/);
   const tags: Record<string, string> = {};
@@ -57,7 +157,7 @@ function parseTwitchMessage(
   }
 
   const privmsgMatch = line.match(/PRIVMSG #\w+ :(.+)$/);
-  if (!privmsgMatch) return;
+  if (!privmsgMatch) return null;
 
   const message = privmsgMatch[1];
   const username = tags['display-name'] || 'unknown';
@@ -95,6 +195,8 @@ function parseTwitchMessage(
     addEmote(particle);
     setTimeout(() => removeEmote(id), 30000);
   });
+
+  return msg;
 }
 
 function randomColor(seed: string): string {
