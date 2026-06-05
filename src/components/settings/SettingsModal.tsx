@@ -6,8 +6,9 @@ import { translations } from '@/lib/i18n';
 import { GROQ_MODELS, GROQ_MODELS_URL, OPENROUTER_MODELS_URL } from '@/lib/llm';
 import { ELEVENLABS_MODELS } from '@/lib/tts';
 import { FONT_MAP } from '@/lib/fonts';
+import { VISION_GROQ_MODELS, VISION_OPENAI_MODELS, VISION_OPENROUTER_MODELS } from '@/lib/vision';
 
-const TABS = ['general', 'history', 'llm', 'tts', 'vrm', 'background', 'caption', 'twitch', 'gaming'] as const;
+const TABS = ['general', 'history', 'llm', 'tts', 'vision', 'vrm', 'background', 'caption', 'twitch', 'gaming'] as const;
 type Tab = typeof TABS[number];
 
 const LLM_PROVIDERS = [
@@ -36,6 +37,14 @@ const TTS_PROVIDERS = [
   { id: 'custom', name: 'Custom API / ngrok / Colab', hasKey: true, hasEndpoint: true },
 ];
 
+const VISION_PROVIDERS = [
+  { id: 'groq', name: 'Groq (Llama 4 Scout / Maverick)', hasKey: true },
+  { id: 'openai', name: 'OpenAI (GPT-4o)', hasKey: true },
+  { id: 'openrouter', name: 'OpenRouter (any vision model)', hasKey: true },
+  { id: 'gemini', name: 'Google Gemini', hasKey: true },
+  { id: 'custom', name: 'Custom / ngrok API', hasKey: true, hasEndpoint: true },
+];
+
 const NOVELAI_MODELS = ['kayra-v1', 'clio-v1', 'euterpe-v2', 'krake-v2'];
 const NOVELAI_VOICES = ['Aini', 'Orea', 'Claea', 'Lim', 'Aurae', 'Naia', 'Ligeia', 'Thalia', 'Euphe'];
 
@@ -55,6 +64,7 @@ export default function SettingsModal() {
   const [local, setLocal] = useState(settings);
   const [showKey, setShowKey] = useState(false);
   const [showPass, setShowPass] = useState(false);
+  const [showVisionKey, setShowVisionKey] = useState(false);
   const [historyInput, setHistoryInput] = useState('');
   const [historyRole, setHistoryRole] = useState<'user' | 'assistant'>('user');
   const [bgUploadError, setBgUploadError] = useState('');
@@ -73,9 +83,11 @@ export default function SettingsModal() {
   const updTwitch = (key: string, val: any) => setLocal((p: any) => ({ ...p, twitch: { ...p.twitch, [key]: val } }));
   const updGaming = (key: string, val: any) => setLocal((p: any) => ({ ...p, gaming: { ...p.gaming, [key]: val } }));
   const updCaption = (key: string, val: any) => setLocal((p: any) => ({ ...p, caption: { ...(p.caption || {}), [key]: val } }));
+  const updVision = (key: string, val: any) => setLocal((p: any) => ({ ...p, vision: { ...p.vision, [key]: val } }));
 
   const llmProvider = LLM_PROVIDERS.find((p) => p.id === local.llm.provider);
   const ttsProvider = TTS_PROVIDERS.find((p) => p.id === local.tts.provider);
+  const visionProvider = VISION_PROVIDERS.find((p) => p.id === local.vision?.provider);
 
   const inputCls = 'w-full bg-dark-600 border border-dark-500 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-accent-primary transition-colors';
   const labelCls = 'block text-xs text-gray-400 mb-1 uppercase tracking-wider';
@@ -89,22 +101,17 @@ export default function SettingsModal() {
     upd('customVrmName', file.name);
   };
 
-  // Convert background image to base64 data URL so it persists across page refreshes
   const handleBgUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setBgUploadError('');
-
-    // Warn if file is very large (>4 MB in base64 will be ~5.3 MB stored)
     if (file.size > 4 * 1024 * 1024) {
       setBgUploadError('Image is large (>4 MB). Consider using a smaller file for better performance.');
     }
-
     const reader = new FileReader();
     reader.onload = (ev) => {
       const dataUrl = ev.target?.result as string;
       upd('customBgDataUrl', dataUrl);
-      // Clear solid color when image is set so the image takes over
       upd('greenScreenColor', '#00ff00');
     };
     reader.onerror = () => setBgUploadError('Failed to read file.');
@@ -130,9 +137,29 @@ export default function SettingsModal() {
     setHistoryInput('');
   };
 
+  // Suggest default model when provider changes
+  const handleVisionProviderChange = (providerId: string) => {
+    updVision('provider', providerId);
+    if (providerId === 'groq') updVision('model', VISION_GROQ_MODELS[0]);
+    else if (providerId === 'openai') updVision('model', VISION_OPENAI_MODELS[0]);
+    else if (providerId === 'openrouter') updVision('model', VISION_OPENROUTER_MODELS[0]);
+    else if (providerId === 'gemini') updVision('model', 'gemini-2.0-flash');
+  };
+
+  // Model suggestions per vision provider
+  const visionModelSuggestions: string[] = (() => {
+    switch (local.vision?.provider) {
+      case 'groq': return VISION_GROQ_MODELS;
+      case 'openai': return VISION_OPENAI_MODELS;
+      case 'openrouter': return VISION_OPENROUTER_MODELS;
+      default: return [];
+    }
+  })();
+
   const TAB_LABELS: Record<Tab, string> = {
     general: 'General', history: 'History', llm: 'LLM', tts: 'TTS',
-    vrm: 'VRM', background: 'Background', caption: 'Caption', twitch: 'Twitch', gaming: 'Gaming',
+    vision: '👁 Vision', vrm: 'VRM', background: 'Background',
+    caption: 'Caption', twitch: 'Twitch', gaming: 'Gaming',
   };
 
   return (
@@ -371,6 +398,160 @@ export default function SettingsModal() {
             </div>
           )}
 
+          {/* VISION */}
+          {tab === 'vision' && (
+            <div className={sectionCls}>
+              {/* Info banner */}
+              <div className="bg-violet-900/30 border border-violet-700/40 rounded-xl p-3 text-xs text-violet-200 space-y-1">
+                <p className="font-semibold text-violet-300">👁 Vision Pipeline (Gaming Mode only)</p>
+                <p>When gaming mode is active, Vision captures a screenshot of your screen/VDO Ninja stream every N seconds, sends it to a vision-capable LLM for a brief description, then passes that description to your main LLM to generate a VTuber comment, which is then spoken via TTS.</p>
+                <p className="text-violet-400">Flow: Screen Frame → Vision LLM → Description → Main LLM → TTS → Caption</p>
+              </div>
+
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-violet-500"
+                  checked={local.vision?.enabled ?? false}
+                  onChange={(e) => updVision('enabled', e.target.checked)}
+                />
+                <span className="text-sm text-white">Enable Vision (requires Gaming Mode to be on)</span>
+              </label>
+
+              <div>
+                <label className={labelCls}>Vision LLM Provider</label>
+                <select
+                  className={inputCls}
+                  value={local.vision?.provider ?? 'groq'}
+                  onChange={(e) => handleVisionProviderChange(e.target.value)}
+                >
+                  {VISION_PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+
+              {visionProvider?.hasKey && (
+                <div>
+                  <label className={labelCls}>
+                    API Key
+                    {local.vision?.provider === 'groq' && (
+                      <span className="ml-2 text-gray-500 normal-case">
+                        (can reuse your Groq key from the LLM tab)
+                      </span>
+                    )}
+                  </label>
+                  <div className="relative">
+                    <input
+                      className={inputCls + ' pr-10'}
+                      type={showVisionKey ? 'text' : 'password'}
+                      value={local.vision?.apiKey ?? ''}
+                      onChange={(e) => updVision('apiKey', e.target.value)}
+                      placeholder="sk-..."
+                    />
+                    <button
+                      onClick={() => setShowVisionKey((p) => !p)}
+                      className="absolute right-2 top-2 text-gray-400"
+                    >
+                      {showVisionKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                  {local.vision?.provider === 'groq' && local.llm.provider === 'groq' && local.llm.apiKey && (
+                    <button
+                      onClick={() => updVision('apiKey', local.llm.apiKey)}
+                      className="mt-1 text-xs text-accent-secondary hover:underline"
+                    >
+                      ↩ Copy from LLM API key
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {visionProvider?.hasEndpoint && (
+                <div>
+                  <label className={labelCls}>Custom Endpoint URL</label>
+                  <input
+                    className={inputCls}
+                    placeholder="http://localhost:8000"
+                    value={local.vision?.customEndpoint ?? ''}
+                    onChange={(e) => updVision('customEndpoint', e.target.value)}
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className={labelCls}>
+                  Vision Model
+                  {local.vision?.provider === 'openrouter' && (
+                    <a href={OPENROUTER_MODELS_URL} target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1">
+                      <ExternalLink size={12} /> Browse Models
+                    </a>
+                  )}
+                </label>
+                {visionModelSuggestions.length > 0 ? (
+                  <>
+                    <input
+                      list="vision-models-list"
+                      className={inputCls}
+                      value={local.vision?.model ?? ''}
+                      onChange={(e) => updVision('model', e.target.value)}
+                      placeholder="Type or select model..."
+                    />
+                    <datalist id="vision-models-list">
+                      {visionModelSuggestions.map((m) => <option key={m} value={m} />)}
+                    </datalist>
+                  </>
+                ) : (
+                  <input
+                    className={inputCls}
+                    value={local.vision?.model ?? ''}
+                    onChange={(e) => updVision('model', e.target.value)}
+                    placeholder="e.g. gemini-2.0-flash"
+                  />
+                )}
+              </div>
+
+              <div>
+                <label className={labelCls}>
+                  Capture Interval: {local.vision?.intervalSeconds ?? 15}s
+                  <span className="ml-2 text-gray-500 normal-case">(min 5s to avoid rate limits)</span>
+                </label>
+                <input
+                  type="range"
+                  min={5}
+                  max={120}
+                  step={5}
+                  value={local.vision?.intervalSeconds ?? 15}
+                  onChange={(e) => updVision('intervalSeconds', parseInt(e.target.value))}
+                  className="w-full accent-violet-500"
+                />
+              </div>
+
+              <div>
+                <label className={labelCls}>Vision System Prompt</label>
+                <textarea
+                  className={inputCls + ' h-20 resize-none'}
+                  value={local.vision?.systemPrompt ?? ''}
+                  onChange={(e) => updVision('systemPrompt', e.target.value)}
+                />
+                <p className="text-xs text-gray-500 mt-1">Instructions for the vision model. Keep it short — the output is passed to the main LLM as context.</p>
+              </div>
+
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-violet-500"
+                  checked={local.vision?.passToMainLLM ?? true}
+                  onChange={(e) => updVision('passToMainLLM', e.target.checked)}
+                />
+                <span className="text-sm text-white">Pass description to main LLM → TTS</span>
+              </label>
+
+              <div className="border-t border-dark-500 pt-3 text-xs text-gray-500 space-y-1">
+                <p><span className="text-gray-400 font-semibold">Screen Share:</span> Works in Chrome and Firefox. The canvas capture reads directly from the &lt;video&gt; element — no CORS issues.</p>
+                <p><span className="text-gray-400 font-semibold">VDO Ninja:</span> VDO Ninja is cross-origin so the iframe's video element can't be read by canvas. The app will send a placeholder image. For best results with VDO Ninja vision, use the screen-share approach pointed at the VDO Ninja tab.</p>
+              </div>
+            </div>
+          )}
+
           {/* VRM */}
           {tab === 'vrm' && (
             <div className={sectionCls}>
@@ -403,46 +584,30 @@ export default function SettingsModal() {
               <p className="text-xs text-gray-400">
                 Set a solid background color or upload a custom image. The image is saved as a data URL and will persist across page reloads.
               </p>
-
-              {/* --- Custom image section --- */}
               <div className="border border-dark-500 rounded-xl p-4 space-y-3 bg-dark-700/40">
                 <p className="text-xs font-semibold text-accent-secondary uppercase tracking-wider">Custom Background Image</p>
-
                 {local.customBgDataUrl ? (
                   <div className="space-y-2">
-                    {/* Preview */}
                     <div className="w-full h-28 rounded-lg overflow-hidden border border-dark-500">
                       <img src={local.customBgDataUrl} alt="bg preview" className="w-full h-full object-cover" />
                     </div>
                     <div className="flex gap-2">
-                      <button
-                        onClick={() => bgFileRef.current?.click()}
-                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-dark-600 hover:bg-dark-500 border border-dark-400 rounded-lg text-sm text-gray-300 hover:text-white transition-all"
-                      >
+                      <button onClick={() => bgFileRef.current?.click()} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-dark-600 hover:bg-dark-500 border border-dark-400 rounded-lg text-sm text-gray-300 hover:text-white transition-all">
                         <Upload size={14} /> Replace Image
                       </button>
-                      <button
-                        onClick={() => upd('customBgDataUrl', '')}
-                        className="flex items-center gap-2 px-3 py-2 bg-red-900/30 hover:bg-red-800/50 border border-red-800/40 rounded-lg text-sm text-red-300 transition-all"
-                      >
+                      <button onClick={() => upd('customBgDataUrl', '')} className="flex items-center gap-2 px-3 py-2 bg-red-900/30 hover:bg-red-800/50 border border-red-800/40 rounded-lg text-sm text-red-300 transition-all">
                         <Trash2 size={14} /> Remove
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <button
-                    onClick={() => bgFileRef.current?.click()}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-4 bg-dark-600 hover:bg-dark-500 border border-dark-400 border-dashed rounded-lg text-sm text-gray-300 hover:text-white transition-all"
-                  >
+                  <button onClick={() => bgFileRef.current?.click()} className="w-full flex items-center justify-center gap-2 px-4 py-4 bg-dark-600 hover:bg-dark-500 border border-dark-400 border-dashed rounded-lg text-sm text-gray-300 hover:text-white transition-all">
                     <Upload size={16} /> Click to upload image (PNG, JPG, GIF, WebP…)
                   </button>
                 )}
                 <input ref={bgFileRef} type="file" accept="image/*" className="hidden" onChange={handleBgUpload} />
                 {bgUploadError && <p className="text-xs text-yellow-400">{bgUploadError}</p>}
-                <p className="text-xs text-gray-500">When a background image is set, the solid color below is ignored for the stage. The image is stored in your browser's local storage and survives page reloads.</p>
               </div>
-
-              {/* --- Solid color section --- */}
               <div className="border border-dark-500 rounded-xl p-4 space-y-3 bg-dark-700/40">
                 <p className="text-xs font-semibold text-accent-secondary uppercase tracking-wider">
                   Solid Color {local.customBgDataUrl ? <span className="text-gray-500 font-normal">(overridden by image above)</span> : ''}
@@ -465,9 +630,6 @@ export default function SettingsModal() {
                       </button>
                     ))}
                   </div>
-                </div>
-                <div className="border-t border-dark-500 pt-3">
-                  <p className="text-xs text-gray-500">In OBS: Add a Browser Source or Window Capture, then apply a Chroma Key filter matching the chosen color.</p>
                 </div>
               </div>
             </div>
