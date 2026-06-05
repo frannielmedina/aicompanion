@@ -30,10 +30,10 @@ export interface TTSConfig {
 export interface TwitchConfig {
   enabled: boolean;
   channelName: string;
-  accessToken?: string;       // optional — anonymous read if omitted
+  accessToken?: string;
   showOverlay: boolean;
   showEmoteWall: boolean;
-  aiRespondsToChat: boolean;  // whether the AI reads & responds to chat
+  aiRespondsToChat: boolean;
 }
 
 export interface GamingModeConfig {
@@ -60,6 +60,28 @@ export interface VisionConfig {
   passToMainLLM: boolean;
 }
 
+export interface CollabConfig {
+  enabled: boolean;
+  // Discord integration
+  discordWebhookUrl: string;
+  discordBotToken: string;
+  discordChannelId: string;
+  discordReadMessages: boolean;   // bot reads Discord messages and feeds to AI
+  discordSendResponses: boolean;  // AI responses sent to Discord
+  discordPrefix: string;          // optional command prefix e.g. "!"
+}
+
+export interface STTConfig {
+  enabled: boolean;
+  provider: 'browser' | 'whisper' | 'deepgram' | 'assemblyai';
+  apiKey: string;
+  language: string;
+  continuous: boolean;           // keep listening vs push-to-talk
+  pushToTalkKey: string;         // key for push-to-talk mode
+  silenceTimeoutMs: number;      // ms of silence before sending
+  sendToLLM: boolean;            // auto-send recognized text to LLM
+}
+
 export interface Settings {
   font: FontOption;
   language: Language;
@@ -76,6 +98,8 @@ export interface Settings {
   caption?: CaptionConfig;
   customBgDataUrl?: string;
   vision: VisionConfig;
+  collab: CollabConfig;
+  stt: STTConfig;
 }
 
 interface AppState {
@@ -89,6 +113,8 @@ interface AppState {
   emoteWall: EmoteParticle[];
   chatPanelVisible: boolean;
   lastVisionDescription: string;
+  sttListening: boolean;
+  sttTranscript: string;
   setSettings: (s: Partial<Settings>) => void;
   setSettingsOpen: (v: boolean) => void;
   setIsSpeaking: (v: boolean) => void;
@@ -101,6 +127,8 @@ interface AppState {
   removeEmote: (id: string) => void;
   setChatPanelVisible: (v: boolean) => void;
   setLastVisionDescription: (v: string) => void;
+  setSttListening: (v: boolean) => void;
+  setSttTranscript: (v: string) => void;
 }
 
 export interface TwitchMessage {
@@ -172,6 +200,25 @@ const defaultSettings: Settings = {
     systemPrompt: 'You are a vision AI that briefly describes what is happening on a game stream screen. Be concise (1-2 sentences). Focus on the game action, score, or key events visible.',
     passToMainLLM: true,
   },
+  collab: {
+    enabled: false,
+    discordWebhookUrl: '',
+    discordBotToken: '',
+    discordChannelId: '',
+    discordReadMessages: false,
+    discordSendResponses: false,
+    discordPrefix: '!',
+  },
+  stt: {
+    enabled: false,
+    provider: 'browser',
+    apiKey: '',
+    language: 'en-US',
+    continuous: true,
+    pushToTalkKey: 'Space',
+    silenceTimeoutMs: 1500,
+    sendToLLM: true,
+  },
 };
 
 export const useStore = create<AppState>()(
@@ -185,8 +232,10 @@ export const useStore = create<AppState>()(
       chatHistory: [],
       twitchMessages: [],
       emoteWall: [],
-      chatPanelVisible: true,
+      chatPanelVisible: false, // hidden by default
       lastVisionDescription: '',
+      sttListening: false,
+      sttTranscript: '',
       setSettings: (s) => set((state) => ({ settings: { ...state.settings, ...s } })),
       setSettingsOpen: (v) => set({ settingsOpen: v }),
       setIsSpeaking: (v) => set({ isSpeaking: v }),
@@ -201,6 +250,8 @@ export const useStore = create<AppState>()(
       removeEmote: (id) => set((state) => ({ emoteWall: state.emoteWall.filter((e) => e.id !== id) })),
       setChatPanelVisible: (v) => set({ chatPanelVisible: v }),
       setLastVisionDescription: (v) => set({ lastVisionDescription: v }),
+      setSttListening: (v) => set({ sttListening: v }),
+      setSttTranscript: (v) => set({ sttTranscript: v }),
     }),
     { name: 'ai-companion-settings', partialize: (s) => ({ settings: s.settings }) }
   )
