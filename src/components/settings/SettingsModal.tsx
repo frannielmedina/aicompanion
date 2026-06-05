@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
-import { X, Save, ExternalLink, Eye, EyeOff, Upload, Trash2 } from 'lucide-react';
+import { X, Save, ExternalLink, Eye, EyeOff, Upload, Trash2, Download, FolderOpen } from 'lucide-react';
 import { useStore } from '@/store';
 import { translations } from '@/lib/i18n';
 import { GROQ_MODELS, GROQ_MODELS_URL, OPENROUTER_MODELS_URL } from '@/lib/llm';
@@ -8,7 +8,7 @@ import { ELEVENLABS_MODELS } from '@/lib/tts';
 import { FONT_MAP } from '@/lib/fonts';
 import { VISION_GROQ_MODELS, VISION_OPENAI_MODELS, VISION_OPENROUTER_MODELS } from '@/lib/vision';
 
-const TABS = ['general', 'history', 'llm', 'tts', 'vision', 'vrm', 'background', 'caption', 'twitch', 'gaming'] as const;
+const TABS = ['general', 'history', 'llm', 'tts', 'stt', 'vision', 'vrm', 'background', 'caption', 'twitch', 'collab', 'gaming'] as const;
 type Tab = typeof TABS[number];
 
 const LLM_PROVIDERS = [
@@ -45,6 +45,13 @@ const VISION_PROVIDERS = [
   { id: 'custom', name: 'Custom / ngrok API', hasKey: true, hasEndpoint: true },
 ];
 
+const STT_PROVIDERS = [
+  { id: 'browser', name: 'Browser Built-in (Web Speech API)', hasKey: false },
+  { id: 'whisper', name: 'OpenAI Whisper', hasKey: true },
+  { id: 'deepgram', name: 'Deepgram', hasKey: true },
+  { id: 'assemblyai', name: 'AssemblyAI', hasKey: true },
+];
+
 const NOVELAI_MODELS = ['kayra-v1', 'clio-v1', 'euterpe-v2', 'krake-v2'];
 const NOVELAI_VOICES = ['Aini', 'Orea', 'Claea', 'Lim', 'Aurae', 'Naia', 'Ligeia', 'Thalia', 'Euphe'];
 
@@ -68,8 +75,10 @@ export default function SettingsModal() {
   const [historyInput, setHistoryInput] = useState('');
   const [historyRole, setHistoryRole] = useState<'user' | 'assistant'>('user');
   const [bgUploadError, setBgUploadError] = useState('');
+  const [saveLoadMsg, setSaveLoadMsg] = useState('');
   const vrmFileRef = useRef<HTMLInputElement>(null);
   const bgFileRef = useRef<HTMLInputElement>(null);
+  const settingsFileRef = useRef<HTMLInputElement>(null);
   const windowRef = useRef<Window | null>(null);
 
   useEffect(() => { if (settingsOpen) setLocal(settings); }, [settingsOpen]);
@@ -84,6 +93,8 @@ export default function SettingsModal() {
   const updGaming = (key: string, val: any) => setLocal((p: any) => ({ ...p, gaming: { ...p.gaming, [key]: val } }));
   const updCaption = (key: string, val: any) => setLocal((p: any) => ({ ...p, caption: { ...(p.caption || {}), [key]: val } }));
   const updVision = (key: string, val: any) => setLocal((p: any) => ({ ...p, vision: { ...p.vision, [key]: val } }));
+  const updCollab = (key: string, val: any) => setLocal((p: any) => ({ ...p, collab: { ...p.collab, [key]: val } }));
+  const updSTT = (key: string, val: any) => setLocal((p: any) => ({ ...p, stt: { ...p.stt, [key]: val } }));
 
   const llmProvider = LLM_PROVIDERS.find((p) => p.id === local.llm.provider);
   const ttsProvider = TTS_PROVIDERS.find((p) => p.id === local.tts.provider);
@@ -92,6 +103,63 @@ export default function SettingsModal() {
   const inputCls = 'w-full bg-dark-600 border border-dark-500 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-accent-primary transition-colors';
   const labelCls = 'block text-xs text-gray-400 mb-1 uppercase tracking-wider';
   const sectionCls = 'space-y-3';
+
+  // ── Save settings to file ──────────────────────────────────────────────────
+  const handleSaveToFile = () => {
+    try {
+      // Strip large blob URLs / base64 bg from exported file to keep it small
+      const exportSettings = {
+        ...local,
+        customVrmUrl: local.customVrmUrl?.startsWith('blob:') ? '' : local.customVrmUrl,
+        customBgDataUrl: local.customBgDataUrl?.length > 200 ? '' : local.customBgDataUrl,
+      };
+      const json = JSON.stringify(exportSettings, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'ai-companion-settings.json';
+      a.click();
+      URL.revokeObjectURL(url);
+      setSaveLoadMsg('✅ Settings saved to file!');
+      setTimeout(() => setSaveLoadMsg(''), 3000);
+    } catch (e) {
+      setSaveLoadMsg('❌ Failed to save settings.');
+    }
+  };
+
+  // ── Load settings from file ────────────────────────────────────────────────
+  const handleLoadFromFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target?.result as string);
+        // Merge with current defaults to handle missing keys gracefully
+        setLocal((prev: any) => ({
+          ...prev,
+          ...parsed,
+          llm: { ...prev.llm, ...parsed.llm },
+          tts: { ...prev.tts, ...parsed.tts },
+          twitch: { ...prev.twitch, ...parsed.twitch },
+          gaming: { ...prev.gaming, ...parsed.gaming },
+          vision: { ...prev.vision, ...parsed.vision },
+          collab: { ...prev.collab, ...parsed.collab },
+          stt: { ...prev.stt, ...parsed.stt },
+          caption: { ...prev.caption, ...parsed.caption },
+        }));
+        setSaveLoadMsg('✅ Settings loaded from file!');
+        setTimeout(() => setSaveLoadMsg(''), 3000);
+      } catch {
+        setSaveLoadMsg('❌ Invalid settings file.');
+        setTimeout(() => setSaveLoadMsg(''), 3000);
+      }
+    };
+    reader.readAsText(file);
+    // Reset input so same file can be re-loaded
+    e.target.value = '';
+  };
 
   const handleVrmUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -156,8 +224,8 @@ export default function SettingsModal() {
 
   const TAB_LABELS: Record<Tab, string> = {
     general: 'General', history: 'History', llm: 'LLM', tts: 'TTS',
-    vision: '👁 Vision', vrm: 'VRM', background: 'Background',
-    caption: 'Caption', twitch: 'Twitch', gaming: 'Gaming',
+    stt: '🎙 STT', vision: '👁 Vision', vrm: 'VRM', background: 'Background',
+    caption: 'Caption', twitch: 'Twitch', collab: '🤝 Collab', gaming: 'Gaming',
   };
 
   return (
@@ -191,7 +259,7 @@ export default function SettingsModal() {
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
 
-          {/* GENERAL */}
+          {/* ── GENERAL ──────────────────────────────────────────────────── */}
           {tab === 'general' && (
             <div className={sectionCls}>
               <div>
@@ -218,10 +286,44 @@ export default function SettingsModal() {
                   <option value="es">Español</option>
                 </select>
               </div>
+
+              {/* ── Save / Load settings ─────────────────────────────────── */}
+              <div className="border-t border-dark-500 pt-4 space-y-2">
+                <p className="text-xs font-semibold text-accent-secondary uppercase tracking-wider">Import / Export Settings</p>
+                <p className="text-xs text-gray-400">
+                  Save your current settings to a JSON file or load a previously saved config. Note: large background images and VRM blob URLs are excluded from the export.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleSaveToFile}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-accent-primary hover:bg-violet-500 text-white rounded-lg text-sm transition-all"
+                  >
+                    <Download size={14} /> Save Settings to File
+                  </button>
+                  <button
+                    onClick={() => settingsFileRef.current?.click()}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-dark-600 hover:bg-dark-500 border border-dark-400 text-gray-200 rounded-lg text-sm transition-all"
+                  >
+                    <FolderOpen size={14} /> Load Settings from File
+                  </button>
+                  <input
+                    ref={settingsFileRef}
+                    type="file"
+                    accept=".json"
+                    className="hidden"
+                    onChange={handleLoadFromFile}
+                  />
+                </div>
+                {saveLoadMsg && (
+                  <p className={`text-xs px-2 py-1 rounded ${saveLoadMsg.startsWith('✅') ? 'text-green-400 bg-green-900/20' : 'text-red-400 bg-red-900/20'}`}>
+                    {saveLoadMsg}
+                  </p>
+                )}
+              </div>
             </div>
           )}
 
-          {/* HISTORY */}
+          {/* ── HISTORY ──────────────────────────────────────────────────── */}
           {tab === 'history' && (
             <div className={sectionCls}>
               <p className="text-xs text-gray-400">Inject messages into the conversation history or override the last assistant response.</p>
@@ -264,7 +366,7 @@ export default function SettingsModal() {
             </div>
           )}
 
-          {/* LLM */}
+          {/* ── LLM ─────────────────────────────────────────────────────── */}
           {tab === 'llm' && (
             <div className={sectionCls}>
               <div>
@@ -338,7 +440,7 @@ export default function SettingsModal() {
             </div>
           )}
 
-          {/* TTS */}
+          {/* ── TTS ─────────────────────────────────────────────────────── */}
           {tab === 'tts' && (
             <div className={sectionCls}>
               <div>
@@ -396,7 +498,134 @@ export default function SettingsModal() {
             </div>
           )}
 
-          {/* VISION */}
+          {/* ── STT (Speech-to-Text) ─────────────────────────────────────── */}
+          {tab === 'stt' && (
+            <div className={sectionCls}>
+              <div className="bg-violet-900/30 border border-violet-700/40 rounded-xl p-3 text-xs text-violet-200 space-y-1">
+                <p className="font-semibold text-violet-300">🎙 Speech-to-Text</p>
+                <p>STT listens to your microphone and converts speech to text. The recognized text can be automatically sent to the LLM as your chat message.</p>
+                <p className="text-violet-400">Flow: Microphone → STT → Text → LLM (optional) → TTS → Caption</p>
+              </div>
+
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-violet-500"
+                  checked={local.stt?.enabled ?? false}
+                  onChange={(e) => updSTT('enabled', e.target.checked)}
+                />
+                <span className="text-sm text-white">Enable STT</span>
+              </label>
+
+              <div>
+                <label className={labelCls}>STT Provider</label>
+                <select className={inputCls} value={local.stt?.provider ?? 'browser'} onChange={(e) => updSTT('provider', e.target.value)}>
+                  {STT_PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+
+              {(local.stt?.provider === 'whisper' || local.stt?.provider === 'deepgram' || local.stt?.provider === 'assemblyai') && (
+                <div>
+                  <label className={labelCls}>API Key</label>
+                  <input
+                    className={inputCls}
+                    type="password"
+                    value={local.stt?.apiKey ?? ''}
+                    onChange={(e) => updSTT('apiKey', e.target.value)}
+                    placeholder="sk-..."
+                  />
+                </div>
+              )}
+
+              {local.stt?.provider === 'browser' && (
+                <div className="bg-dark-700/60 rounded-lg p-3 text-xs text-gray-400 border border-dark-500">
+                  The browser Web Speech API works in Chrome and Edge without any API key. It uses Google's speech recognition servers. Firefox is not supported.
+                </div>
+              )}
+
+              <div>
+                <label className={labelCls}>Language</label>
+                <input
+                  className={inputCls}
+                  value={local.stt?.language ?? 'en-US'}
+                  onChange={(e) => updSTT('language', e.target.value)}
+                  placeholder="en-US"
+                />
+                <p className="text-xs text-gray-500 mt-1">BCP-47 language tag, e.g. en-US, es-ES, ja-JP</p>
+              </div>
+
+              <div className="border-t border-dark-500 pt-3 space-y-3">
+                <p className="text-xs font-semibold text-accent-secondary uppercase tracking-wider">Activation Mode</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => updSTT('continuous', true)}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm transition-all ${local.stt?.continuous ? 'bg-accent-primary text-white' : 'bg-dark-600 text-gray-400'}`}
+                  >
+                    🎤 Continuous
+                  </button>
+                  <button
+                    onClick={() => updSTT('continuous', false)}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm transition-all ${!local.stt?.continuous ? 'bg-accent-primary text-white' : 'bg-dark-600 text-gray-400'}`}
+                  >
+                    🔘 Push-to-Talk
+                  </button>
+                </div>
+                {!local.stt?.continuous && (
+                  <div>
+                    <label className={labelCls}>Push-to-Talk Key</label>
+                    <input
+                      className={inputCls}
+                      value={local.stt?.pushToTalkKey ?? 'Space'}
+                      onChange={(e) => updSTT('pushToTalkKey', e.target.value)}
+                      placeholder="Space"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Key code, e.g. Space, KeyV, F9</p>
+                  </div>
+                )}
+                {local.stt?.continuous && (
+                  <div>
+                    <label className={labelCls}>
+                      Silence Timeout: {local.stt?.silenceTimeoutMs ?? 1500}ms
+                    </label>
+                    <input
+                      type="range"
+                      min={500}
+                      max={5000}
+                      step={100}
+                      value={local.stt?.silenceTimeoutMs ?? 1500}
+                      onChange={(e) => updSTT('silenceTimeoutMs', parseInt(e.target.value))}
+                      className="w-full accent-violet-500"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Wait this long after speech stops before finalizing the phrase.</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="border-t border-dark-500 pt-3 space-y-2">
+                <p className="text-xs font-semibold text-accent-secondary uppercase tracking-wider">Behavior</p>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 accent-violet-500"
+                    checked={local.stt?.sendToLLM ?? true}
+                    onChange={(e) => updSTT('sendToLLM', e.target.checked)}
+                  />
+                  <span className="text-sm text-white">Automatically send recognized speech to LLM</span>
+                </label>
+                {!local.stt?.sendToLLM && (
+                  <p className="text-xs text-gray-400 ml-6">
+                    Recognized text will appear in the chat input box only — you confirm with Enter.
+                  </p>
+                )}
+              </div>
+
+              <div className="border-t border-dark-500 pt-3 text-xs text-gray-500 space-y-1">
+                <p><span className="text-gray-400 font-semibold">Note:</span> STT integration is set up here in settings. The actual microphone capture logic runs in the TopBar/chat panel when STT is enabled.</p>
+              </div>
+            </div>
+          )}
+
+          {/* ── VISION ─────────────────────────────────────────────────── */}
           {tab === 'vision' && (
             <div className={sectionCls}>
               <div className="bg-violet-900/30 border border-violet-700/40 rounded-xl p-3 text-xs text-violet-200 space-y-1">
@@ -406,153 +635,67 @@ export default function SettingsModal() {
               </div>
 
               <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="w-4 h-4 accent-violet-500"
-                  checked={local.vision?.enabled ?? false}
-                  onChange={(e) => updVision('enabled', e.target.checked)}
-                />
+                <input type="checkbox" className="w-4 h-4 accent-violet-500" checked={local.vision?.enabled ?? false} onChange={(e) => updVision('enabled', e.target.checked)} />
                 <span className="text-sm text-white">Enable Vision (requires Gaming Mode to be on)</span>
               </label>
 
               <div>
                 <label className={labelCls}>Vision LLM Provider</label>
-                <select
-                  className={inputCls}
-                  value={local.vision?.provider ?? 'groq'}
-                  onChange={(e) => handleVisionProviderChange(e.target.value)}
-                >
+                <select className={inputCls} value={local.vision?.provider ?? 'groq'} onChange={(e) => handleVisionProviderChange(e.target.value)}>
                   {VISION_PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </div>
 
               {visionProvider?.hasKey && (
                 <div>
-                  <label className={labelCls}>
-                    API Key
-                    {local.vision?.provider === 'groq' && (
-                      <span className="ml-2 text-gray-500 normal-case">
-                        (can reuse your Groq key from the LLM tab)
-                      </span>
-                    )}
-                  </label>
+                  <label className={labelCls}>API Key {local.vision?.provider === 'groq' && <span className="ml-2 text-gray-500 normal-case">(can reuse your Groq key from the LLM tab)</span>}</label>
                   <div className="relative">
-                    <input
-                      className={inputCls + ' pr-10'}
-                      type={showVisionKey ? 'text' : 'password'}
-                      value={local.vision?.apiKey ?? ''}
-                      onChange={(e) => updVision('apiKey', e.target.value)}
-                      placeholder="sk-..."
-                    />
-                    <button
-                      onClick={() => setShowVisionKey((p) => !p)}
-                      className="absolute right-2 top-2 text-gray-400"
-                    >
-                      {showVisionKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
+                    <input className={inputCls + ' pr-10'} type={showVisionKey ? 'text' : 'password'} value={local.vision?.apiKey ?? ''} onChange={(e) => updVision('apiKey', e.target.value)} placeholder="sk-..." />
+                    <button onClick={() => setShowVisionKey((p) => !p)} className="absolute right-2 top-2 text-gray-400">{showVisionKey ? <EyeOff size={16} /> : <Eye size={16} />}</button>
                   </div>
                   {local.vision?.provider === 'groq' && local.llm.provider === 'groq' && local.llm.apiKey && (
-                    <button
-                      onClick={() => updVision('apiKey', local.llm.apiKey)}
-                      className="mt-1 text-xs text-accent-secondary hover:underline"
-                    >
-                      ↩ Copy from LLM API key
-                    </button>
+                    <button onClick={() => updVision('apiKey', local.llm.apiKey)} className="mt-1 text-xs text-accent-secondary hover:underline">↩ Copy from LLM API key</button>
                   )}
                 </div>
               )}
 
               {visionProvider?.hasEndpoint && (
-                <div>
-                  <label className={labelCls}>Custom Endpoint URL</label>
-                  <input
-                    className={inputCls}
-                    placeholder="http://localhost:8000"
-                    value={local.vision?.customEndpoint ?? ''}
-                    onChange={(e) => updVision('customEndpoint', e.target.value)}
-                  />
-                </div>
+                <div><label className={labelCls}>Custom Endpoint URL</label><input className={inputCls} placeholder="http://localhost:8000" value={local.vision?.customEndpoint ?? ''} onChange={(e) => updVision('customEndpoint', e.target.value)} /></div>
               )}
 
               <div>
-                <label className={labelCls}>
-                  Vision Model
-                  {local.vision?.provider === 'openrouter' && (
-                    <a href={OPENROUTER_MODELS_URL} target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1">
-                      <ExternalLink size={12} /> Browse Models
-                    </a>
-                  )}
-                </label>
+                <label className={labelCls}>Vision Model {local.vision?.provider === 'openrouter' && <a href={OPENROUTER_MODELS_URL} target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1"><ExternalLink size={12} /> Browse Models</a>}</label>
                 {visionModelSuggestions.length > 0 ? (
                   <>
-                    <input
-                      list="vision-models-list"
-                      className={inputCls}
-                      value={local.vision?.model ?? ''}
-                      onChange={(e) => updVision('model', e.target.value)}
-                      placeholder="Type or select model..."
-                    />
-                    <datalist id="vision-models-list">
-                      {visionModelSuggestions.map((m) => <option key={m} value={m} />)}
-                    </datalist>
+                    <input list="vision-models-list" className={inputCls} value={local.vision?.model ?? ''} onChange={(e) => updVision('model', e.target.value)} placeholder="Type or select model..." />
+                    <datalist id="vision-models-list">{visionModelSuggestions.map((m) => <option key={m} value={m} />)}</datalist>
                   </>
                 ) : (
-                  <input
-                    className={inputCls}
-                    value={local.vision?.model ?? ''}
-                    onChange={(e) => updVision('model', e.target.value)}
-                    placeholder="e.g. gemini-2.0-flash"
-                  />
+                  <input className={inputCls} value={local.vision?.model ?? ''} onChange={(e) => updVision('model', e.target.value)} placeholder="e.g. gemini-2.0-flash" />
                 )}
               </div>
 
               <div>
-                <label className={labelCls}>
-                  Capture Interval: {local.vision?.intervalSeconds ?? 15}s
-                  <span className="ml-2 text-gray-500 normal-case">(min 5s to avoid rate limits)</span>
-                </label>
-                <input
-                  type="range"
-                  min={5}
-                  max={120}
-                  step={5}
-                  value={local.vision?.intervalSeconds ?? 15}
-                  onChange={(e) => updVision('intervalSeconds', parseInt(e.target.value))}
-                  className="w-full accent-violet-500"
-                />
+                <label className={labelCls}>Capture Interval: {local.vision?.intervalSeconds ?? 15}s <span className="ml-2 text-gray-500 normal-case">(min 5s to avoid rate limits)</span></label>
+                <input type="range" min={5} max={120} step={5} value={local.vision?.intervalSeconds ?? 15} onChange={(e) => updVision('intervalSeconds', parseInt(e.target.value))} className="w-full accent-violet-500" />
               </div>
 
               <div>
                 <label className={labelCls}>Vision System Prompt</label>
-                <textarea
-                  className={inputCls + ' h-20 resize-none'}
-                  value={local.vision?.systemPrompt ?? ''}
-                  onChange={(e) => updVision('systemPrompt', e.target.value)}
-                />
-                <p className="text-xs text-gray-500 mt-1">Instructions for the vision model. Keep it short — the output is passed to the main LLM as context.</p>
+                <textarea className={inputCls + ' h-20 resize-none'} value={local.vision?.systemPrompt ?? ''} onChange={(e) => updVision('systemPrompt', e.target.value)} />
               </div>
 
               <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="w-4 h-4 accent-violet-500"
-                  checked={local.vision?.passToMainLLM ?? true}
-                  onChange={(e) => updVision('passToMainLLM', e.target.checked)}
-                />
+                <input type="checkbox" className="w-4 h-4 accent-violet-500" checked={local.vision?.passToMainLLM ?? true} onChange={(e) => updVision('passToMainLLM', e.target.checked)} />
                 <span className="text-sm text-white">Pass description to main LLM → TTS</span>
               </label>
-
-              <div className="border-t border-dark-500 pt-3 text-xs text-gray-500 space-y-1">
-                <p><span className="text-gray-400 font-semibold">Screen Share:</span> Works in Chrome and Firefox. The canvas capture reads directly from the &lt;video&gt; element — no CORS issues.</p>
-                <p><span className="text-gray-400 font-semibold">VDO Ninja:</span> VDO Ninja is cross-origin so the iframe's video element can't be read by canvas. The app will send a placeholder image. For best results with VDO Ninja vision, use the screen-share approach pointed at the VDO Ninja tab.</p>
-              </div>
             </div>
           )}
 
-          {/* VRM */}
+          {/* ── VRM ─────────────────────────────────────────────────────── */}
           {tab === 'vrm' && (
             <div className={sectionCls}>
-              <p className="text-xs text-gray-400">Upload a custom VRM model to replace the default character. The file is stored locally in your browser session.</p>
+              <p className="text-xs text-gray-400">Upload a custom VRM model to replace the default character.</p>
               <div>
                 <label className={labelCls}>Current Model</label>
                 <div className="bg-dark-700 rounded-lg px-3 py-2 text-sm text-gray-300 border border-dark-500">{local.customVrmName || 'miko.vrm (default)'}</div>
@@ -569,18 +712,12 @@ export default function SettingsModal() {
                   <Trash2 size={14} /> Reset to Default Model
                 </button>
               )}
-              <div className="border-t border-dark-500 pt-3">
-                <p className="text-xs text-gray-500">Note: The VRM file URL is a temporary blob URL that expires when you close the browser tab. You may need to re-upload after refreshing.</p>
-              </div>
             </div>
           )}
 
-          {/* BACKGROUND */}
+          {/* ── BACKGROUND ──────────────────────────────────────────────── */}
           {tab === 'background' && (
             <div className={sectionCls}>
-              <p className="text-xs text-gray-400">
-                Set a solid background color or upload a custom image. The image is saved as a data URL and will persist across page reloads.
-              </p>
               <div className="border border-dark-500 rounded-xl p-4 space-y-3 bg-dark-700/40">
                 <p className="text-xs font-semibold text-accent-secondary uppercase tracking-wider">Custom Background Image</p>
                 {local.customBgDataUrl ? (
@@ -589,12 +726,8 @@ export default function SettingsModal() {
                       <img src={local.customBgDataUrl} alt="bg preview" className="w-full h-full object-cover" />
                     </div>
                     <div className="flex gap-2">
-                      <button onClick={() => bgFileRef.current?.click()} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-dark-600 hover:bg-dark-500 border border-dark-400 rounded-lg text-sm text-gray-300 hover:text-white transition-all">
-                        <Upload size={14} /> Replace Image
-                      </button>
-                      <button onClick={() => upd('customBgDataUrl', '')} className="flex items-center gap-2 px-3 py-2 bg-red-900/30 hover:bg-red-800/50 border border-red-800/40 rounded-lg text-sm text-red-300 transition-all">
-                        <Trash2 size={14} /> Remove
-                      </button>
+                      <button onClick={() => bgFileRef.current?.click()} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-dark-600 hover:bg-dark-500 border border-dark-400 rounded-lg text-sm text-gray-300 hover:text-white transition-all"><Upload size={14} /> Replace Image</button>
+                      <button onClick={() => upd('customBgDataUrl', '')} className="flex items-center gap-2 px-3 py-2 bg-red-900/30 hover:bg-red-800/50 border border-red-800/40 rounded-lg text-sm text-red-300 transition-all"><Trash2 size={14} /> Remove</button>
                     </div>
                   </div>
                 ) : (
@@ -606,9 +739,7 @@ export default function SettingsModal() {
                 {bgUploadError && <p className="text-xs text-yellow-400">{bgUploadError}</p>}
               </div>
               <div className="border border-dark-500 rounded-xl p-4 space-y-3 bg-dark-700/40">
-                <p className="text-xs font-semibold text-accent-secondary uppercase tracking-wider">
-                  Solid Color {local.customBgDataUrl ? <span className="text-gray-500 font-normal">(overridden by image above)</span> : ''}
-                </p>
+                <p className="text-xs font-semibold text-accent-secondary uppercase tracking-wider">Solid Color {local.customBgDataUrl ? <span className="text-gray-500 font-normal">(overridden by image above)</span> : ''}</p>
                 <div>
                   <label className={labelCls}>Background Color</label>
                   <div className="flex gap-2 items-center">
@@ -632,7 +763,7 @@ export default function SettingsModal() {
             </div>
           )}
 
-          {/* CAPTION */}
+          {/* ── CAPTION ─────────────────────────────────────────────────── */}
           {tab === 'caption' && (
             <div className={sectionCls}>
               <p className="text-xs text-gray-400">Customize the captions displayed when the VTuber speaks.</p>
@@ -679,7 +810,7 @@ export default function SettingsModal() {
             </div>
           )}
 
-          {/* TWITCH */}
+          {/* ── TWITCH ──────────────────────────────────────────────────── */}
           {tab === 'twitch' && (
             <div className={sectionCls}>
               <label className="flex items-center gap-2 cursor-pointer">
@@ -691,22 +822,9 @@ export default function SettingsModal() {
                 <input className={inputCls} value={local.twitch.channelName} onChange={(e) => updTwitch('channelName', e.target.value)} placeholder="your_channel" />
               </div>
               <div>
-                <label className={labelCls}>
-                  {t.twitchToken}
-                  <span className="ml-2 text-gray-500 normal-case font-normal">(optional — read-only if omitted)</span>
-                  {' '}
-                  <a href="https://twitchtokengenerator.com" target="_blank" rel="noreferrer" className="ml-1 text-accent-secondary hover:underline inline-flex items-center gap-1"><ExternalLink size={12} /> Get Token</a>
-                </label>
-                <input
-                  className={inputCls}
-                  type="password"
-                  value={local.twitch.accessToken || ''}
-                  onChange={(e) => updTwitch('accessToken', e.target.value)}
-                  placeholder="oauth:... (leave blank for anonymous)"
-                />
-                <p className="text-xs text-gray-500 mt-1">Without a token the bot joins anonymously and can read chat — it just can't send messages.</p>
+                <label className={labelCls}>{t.twitchToken} <span className="ml-2 text-gray-500 normal-case font-normal">(optional)</span> <a href="https://twitchtokengenerator.com" target="_blank" rel="noreferrer" className="ml-1 text-accent-secondary hover:underline inline-flex items-center gap-1"><ExternalLink size={12} /> Get Token</a></label>
+                <input className={inputCls} type="password" value={local.twitch.accessToken || ''} onChange={(e) => updTwitch('accessToken', e.target.value)} placeholder="oauth:..." />
               </div>
-
               <div className="border-t border-dark-500 pt-3 space-y-2">
                 <p className="text-xs font-semibold text-accent-secondary uppercase tracking-wider">Display</p>
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -718,29 +836,138 @@ export default function SettingsModal() {
                   <span className="text-sm text-white">{t.showEmoteWall}</span>
                 </label>
               </div>
-
               <div className="border-t border-dark-500 pt-3 space-y-2">
                 <p className="text-xs font-semibold text-accent-secondary uppercase tracking-wider">AI Integration</p>
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="w-4 h-4 accent-violet-500"
-                    checked={local.twitch.aiRespondsToChat ?? false}
-                    onChange={(e) => updTwitch('aiRespondsToChat', e.target.checked)}
-                  />
+                  <input type="checkbox" className="w-4 h-4 accent-violet-500" checked={local.twitch.aiRespondsToChat ?? false} onChange={(e) => updTwitch('aiRespondsToChat', e.target.checked)} />
                   <span className="text-sm text-white">AI reads &amp; responds to chat messages</span>
                 </label>
-                {local.twitch.aiRespondsToChat && (
-                  <p className="text-xs text-gray-400 ml-6">
-                    Each new Twitch message will be sent to your configured LLM and spoken via TTS.
-                    Busy periods are skipped so responses never stack up. Requires LLM to be configured.
-                  </p>
-                )}
               </div>
             </div>
           )}
 
-          {/* GAMING */}
+          {/* ── COLLAB MODE ─────────────────────────────────────────────── */}
+          {tab === 'collab' && (
+            <div className={sectionCls}>
+              <div className="bg-violet-900/30 border border-violet-700/40 rounded-xl p-3 text-xs text-violet-200 space-y-1">
+                <p className="font-semibold text-violet-300">🤝 Collab Mode</p>
+                <p>Connect your VTuber to Discord so it can read messages from a channel and optionally send AI responses back. Great for cross-platform streaming and collaborative setups.</p>
+              </div>
+
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-violet-500"
+                  checked={local.collab?.enabled ?? false}
+                  onChange={(e) => updCollab('enabled', e.target.checked)}
+                />
+                <span className="text-sm text-white">Enable Collab Mode</span>
+              </label>
+
+              {/* ── Discord ──────────────────────────────────────────────── */}
+              <div className="border border-dark-500 rounded-xl p-4 space-y-3 bg-dark-700/40">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">🎮</span>
+                  <p className="text-xs font-semibold text-accent-secondary uppercase tracking-wider">Discord Integration</p>
+                  <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer" className="ml-auto text-xs text-accent-secondary hover:underline inline-flex items-center gap-1">
+                    <ExternalLink size={11} /> Developer Portal
+                  </a>
+                </div>
+
+                <div>
+                  <label className={labelCls}>
+                    Bot Token
+                    <span className="ml-2 text-gray-500 normal-case font-normal">— from Discord Developer Portal → Bot</span>
+                  </label>
+                  <input
+                    className={inputCls}
+                    type="password"
+                    value={local.collab?.discordBotToken ?? ''}
+                    onChange={(e) => updCollab('discordBotToken', e.target.value)}
+                    placeholder="MTEx…"
+                  />
+                </div>
+
+                <div>
+                  <label className={labelCls}>
+                    Channel ID
+                    <span className="ml-2 text-gray-500 normal-case font-normal">— right-click channel → Copy ID</span>
+                  </label>
+                  <input
+                    className={inputCls}
+                    value={local.collab?.discordChannelId ?? ''}
+                    onChange={(e) => updCollab('discordChannelId', e.target.value)}
+                    placeholder="123456789012345678"
+                  />
+                </div>
+
+                <div>
+                  <label className={labelCls}>
+                    Webhook URL
+                    <span className="ml-2 text-gray-500 normal-case font-normal">— for sending AI responses to Discord</span>
+                  </label>
+                  <input
+                    className={inputCls}
+                    value={local.collab?.discordWebhookUrl ?? ''}
+                    onChange={(e) => updCollab('discordWebhookUrl', e.target.value)}
+                    placeholder="https://discord.com/api/webhooks/…"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Server Settings → Integrations → Webhooks → New Webhook</p>
+                </div>
+
+                <div>
+                  <label className={labelCls}>Command Prefix</label>
+                  <input
+                    className={inputCls}
+                    value={local.collab?.discordPrefix ?? '!'}
+                    onChange={(e) => updCollab('discordPrefix', e.target.value)}
+                    placeholder="!"
+                    style={{ maxWidth: '80px' }}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Optional. If set, only messages starting with this prefix are forwarded to the AI. Leave empty to forward all messages.</p>
+                </div>
+
+                <div className="border-t border-dark-500 pt-3 space-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 accent-violet-500"
+                      checked={local.collab?.discordReadMessages ?? false}
+                      onChange={(e) => updCollab('discordReadMessages', e.target.checked)}
+                    />
+                    <span className="text-sm text-white">Read Discord messages → send to AI</span>
+                  </label>
+                  {local.collab?.discordReadMessages && (
+                    <p className="text-xs text-gray-400 ml-6">
+                      The VTuber will react to messages from the configured Discord channel, just like it does with Twitch chat.
+                    </p>
+                  )}
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 accent-violet-500"
+                      checked={local.collab?.discordSendResponses ?? false}
+                      onChange={(e) => updCollab('discordSendResponses', e.target.checked)}
+                    />
+                    <span className="text-sm text-white">Send AI responses back to Discord</span>
+                  </label>
+                  {local.collab?.discordSendResponses && (
+                    <p className="text-xs text-gray-400 ml-6">
+                      Requires a Webhook URL above. Each AI response will be posted to the Discord channel as the webhook bot.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="text-xs text-gray-500 space-y-1 pt-1">
+                <p><span className="text-gray-400 font-semibold">How it works:</span> The browser connects to Discord's Gateway WebSocket using your bot token. This runs entirely client-side — no backend required.</p>
+                <p><span className="text-gray-400 font-semibold">Permissions needed:</span> Your bot needs <code className="bg-dark-600 px-1 rounded">MESSAGE CONTENT INTENT</code> enabled in the Developer Portal under your bot's Privileged Gateway Intents.</p>
+              </div>
+            </div>
+          )}
+
+          {/* ── GAMING ──────────────────────────────────────────────────── */}
           {tab === 'gaming' && (
             <div className={sectionCls}>
               <label className="flex items-center gap-2 cursor-pointer">
