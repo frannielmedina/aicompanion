@@ -57,20 +57,12 @@ export default function SettingsModal() {
   const [showPass, setShowPass] = useState(false);
   const [historyInput, setHistoryInput] = useState('');
   const [historyRole, setHistoryRole] = useState<'user' | 'assistant'>('user');
+  const [bgUploadError, setBgUploadError] = useState('');
   const vrmFileRef = useRef<HTMLInputElement>(null);
+  const bgFileRef = useRef<HTMLInputElement>(null);
   const windowRef = useRef<Window | null>(null);
 
   useEffect(() => { if (settingsOpen) setLocal(settings); }, [settingsOpen]);
-
-  // Open settings in a popup window
-  useEffect(() => {
-    if (settingsOpen) {
-      // Instead of using a popup (which can't share React state),
-      // we render inline but make it feel detached with a floating panel
-      // The "open in new window" approach requires a separate route.
-      // Here we keep the modal but add a button to pop it out.
-    }
-  }, [settingsOpen]);
 
   if (!settingsOpen) return null;
 
@@ -89,7 +81,6 @@ export default function SettingsModal() {
   const labelCls = 'block text-xs text-gray-400 mb-1 uppercase tracking-wider';
   const sectionCls = 'space-y-3';
 
-  // Handle VRM file upload (store as object URL)
   const handleVrmUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -98,21 +89,33 @@ export default function SettingsModal() {
     upd('customVrmName', file.name);
   };
 
-  // Open settings in a separate browser window
-  const openInNewWindow = () => {
-    const w = window.open(
-      '/settings',
-      'ai-companion-settings',
-      'width=720,height=800,resizable=yes,scrollbars=yes'
-    );
-    if (w) {
-      windowRef.current = w;
-      // Save current settings to localStorage so the new window can pick them up
-      setSettings(local);
+  // Convert background image to base64 data URL so it persists across page refreshes
+  const handleBgUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBgUploadError('');
+
+    // Warn if file is very large (>4 MB in base64 will be ~5.3 MB stored)
+    if (file.size > 4 * 1024 * 1024) {
+      setBgUploadError('Image is large (>4 MB). Consider using a smaller file for better performance.');
     }
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      upd('customBgDataUrl', dataUrl);
+      // Clear solid color when image is set so the image takes over
+      upd('greenScreenColor', '#00ff00');
+    };
+    reader.onerror = () => setBgUploadError('Failed to read file.');
+    reader.readAsDataURL(file);
   };
 
-  // History: inject a message into history
+  const openInNewWindow = () => {
+    const w = window.open('/settings', 'ai-companion-settings', 'width=720,height=800,resizable=yes,scrollbars=yes');
+    if (w) { windowRef.current = w; setSettings(local); }
+  };
+
   const injectHistory = () => {
     const msg = historyInput.trim();
     if (!msg) return;
@@ -120,31 +123,16 @@ export default function SettingsModal() {
     setHistoryInput('');
   };
 
-  // History: override last assistant message
   const overrideLastAssistant = () => {
     const msg = historyInput.trim();
     if (!msg) return;
-    // Find last assistant message index
-    const lastIdx = [...chatHistory].reverse().findIndex((m) => m.role === 'assistant');
-    if (lastIdx === -1) {
-      addChat({ role: 'assistant', content: msg });
-    } else {
-      // We can't mutate directly; add as new assistant message — user can clear and re-inject
-      addChat({ role: 'assistant', content: msg });
-    }
+    addChat({ role: 'assistant', content: msg });
     setHistoryInput('');
   };
 
   const TAB_LABELS: Record<Tab, string> = {
-    general: 'General',
-    history: 'History',
-    llm: 'LLM',
-    tts: 'TTS',
-    vrm: 'VRM',
-    background: 'Background',
-    caption: 'Caption',
-    twitch: 'Twitch',
-    gaming: 'Gaming',
+    general: 'General', history: 'History', llm: 'LLM', tts: 'TTS',
+    vrm: 'VRM', background: 'Background', caption: 'Caption', twitch: 'Twitch', gaming: 'Gaming',
   };
 
   return (
@@ -156,11 +144,7 @@ export default function SettingsModal() {
             ⚙️ {t.settings}
           </h2>
           <div className="flex items-center gap-2">
-            <button
-              onClick={openInNewWindow}
-              title="Open in new window"
-              className="text-gray-400 hover:text-accent-secondary transition-colors p-1"
-            >
+            <button onClick={openInNewWindow} title="Open in new window" className="text-gray-400 hover:text-accent-secondary transition-colors p-1">
               <ExternalLink size={16} />
             </button>
             <button onClick={() => setSettingsOpen(false)} className="text-gray-400 hover:text-white transition-colors">
@@ -215,17 +199,11 @@ export default function SettingsModal() {
           {/* HISTORY */}
           {tab === 'history' && (
             <div className={sectionCls}>
-              <p className="text-xs text-gray-400">
-                Inject messages into the conversation history or override the last assistant response.
-              </p>
-
-              {/* Current history preview */}
+              <p className="text-xs text-gray-400">Inject messages into the conversation history or override the last assistant response.</p>
               <div>
                 <label className={labelCls}>Current History ({chatHistory.length} messages)</label>
                 <div className="bg-dark-700 rounded-lg p-3 max-h-48 overflow-y-auto space-y-2 border border-dark-500">
-                  {chatHistory.length === 0 && (
-                    <p className="text-gray-500 text-xs">No history yet.</p>
-                  )}
+                  {chatHistory.length === 0 && <p className="text-gray-500 text-xs">No history yet.</p>}
                   {chatHistory.map((msg, i) => (
                     <div key={i} className={`text-xs px-2 py-1 rounded ${msg.role === 'user' ? 'bg-accent-primary/20 text-blue-300' : 'bg-dark-600 text-gray-300'}`}>
                       <span className="font-bold text-gray-400 mr-1">[{msg.role}]</span>
@@ -234,54 +212,27 @@ export default function SettingsModal() {
                   ))}
                 </div>
               </div>
-
-              {/* Inject / override */}
               <div>
                 <label className={labelCls}>Message to inject</label>
                 <div className="flex gap-2 mb-2">
-                  <button
-                    onClick={() => setHistoryRole('user')}
-                    className={`px-3 py-1 rounded text-xs ${historyRole === 'user' ? 'bg-accent-primary text-white' : 'bg-dark-600 text-gray-400'}`}
-                  >
-                    User
-                  </button>
-                  <button
-                    onClick={() => setHistoryRole('assistant')}
-                    className={`px-3 py-1 rounded text-xs ${historyRole === 'assistant' ? 'bg-accent-primary text-white' : 'bg-dark-600 text-gray-400'}`}
-                  >
-                    Assistant
-                  </button>
+                  {(['user', 'assistant'] as const).map((r) => (
+                    <button key={r} onClick={() => setHistoryRole(r)}
+                      className={`px-3 py-1 rounded text-xs ${historyRole === r ? 'bg-accent-primary text-white' : 'bg-dark-600 text-gray-400'}`}>
+                      {r.charAt(0).toUpperCase() + r.slice(1)}
+                    </button>
+                  ))}
                 </div>
-                <textarea
-                  className={inputCls + ' h-20 resize-none'}
-                  placeholder="Type a message to inject..."
-                  value={historyInput}
-                  onChange={(e) => setHistoryInput(e.target.value)}
-                />
+                <textarea className={inputCls + ' h-20 resize-none'} placeholder="Type a message to inject..." value={historyInput} onChange={(e) => setHistoryInput(e.target.value)} />
               </div>
-
               <div className="flex gap-2">
-                <button
-                  onClick={injectHistory}
-                  className="flex-1 px-4 py-2 bg-accent-primary hover:bg-violet-500 text-white rounded-lg text-sm transition-all"
-                >
-                  ➕ Inject Message
-                </button>
+                <button onClick={injectHistory} className="flex-1 px-4 py-2 bg-accent-primary hover:bg-violet-500 text-white rounded-lg text-sm transition-all">➕ Inject Message</button>
                 {historyRole === 'assistant' && (
-                  <button
-                    onClick={overrideLastAssistant}
-                    className="flex-1 px-4 py-2 bg-dark-600 hover:bg-dark-500 text-white rounded-lg text-sm border border-dark-400 transition-all"
-                  >
-                    🔄 Override Last Response
-                  </button>
+                  <button onClick={overrideLastAssistant} className="flex-1 px-4 py-2 bg-dark-600 hover:bg-dark-500 text-white rounded-lg text-sm border border-dark-400 transition-all">🔄 Override Last Response</button>
                 )}
               </div>
-
               <div className="border-t border-dark-500 pt-3">
-                <button
-                  onClick={() => { if (confirm('Clear all history?')) { useStore.getState().clearChat(); } }}
-                  className="w-full px-4 py-2 bg-red-900/40 hover:bg-red-800/60 text-red-300 rounded-lg text-sm border border-red-800/40 transition-all flex items-center justify-center gap-2"
-                >
+                <button onClick={() => { if (confirm('Clear all history?')) { useStore.getState().clearChat(); } }}
+                  className="w-full px-4 py-2 bg-red-900/40 hover:bg-red-800/60 text-red-300 rounded-lg text-sm border border-red-800/40 transition-all flex items-center justify-center gap-2">
                   <Trash2 size={14} /> Clear All History
                 </button>
               </div>
@@ -297,13 +248,9 @@ export default function SettingsModal() {
                   {LLM_PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </div>
-
               {llmProvider?.hasAuth && (
                 <>
-                  <div>
-                    <label className={labelCls}>{t.email}</label>
-                    <input className={inputCls} type="email" value={local.llm.email || ''} onChange={(e) => updLLM('email', e.target.value)} />
-                  </div>
+                  <div><label className={labelCls}>{t.email}</label><input className={inputCls} type="email" value={local.llm.email || ''} onChange={(e) => updLLM('email', e.target.value)} /></div>
                   <div>
                     <label className={labelCls}>{t.password}</label>
                     <div className="relative">
@@ -312,8 +259,7 @@ export default function SettingsModal() {
                     </div>
                   </div>
                   {local.llm.provider === 'novelai' && (
-                    <div>
-                      <label className={labelCls}>{t.model}</label>
+                    <div><label className={labelCls}>{t.model}</label>
                       <select className={inputCls} value={local.llm.model} onChange={(e) => updLLM('model', e.target.value)}>
                         {NOVELAI_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
                       </select>
@@ -321,7 +267,6 @@ export default function SettingsModal() {
                   )}
                 </>
               )}
-
               {llmProvider?.hasKey && (
                 <div>
                   <label className={labelCls}>{t.apiKey}</label>
@@ -331,72 +276,32 @@ export default function SettingsModal() {
                   </div>
                 </div>
               )}
-
               {llmProvider?.hasEndpoint && (
-                <div>
-                  <label className={labelCls}>{t.customEndpoint}</label>
-                  <input className={inputCls} placeholder="https://your-ngrok-url.ngrok.io" value={local.llm.customEndpoint || ''} onChange={(e) => updLLM('customEndpoint', e.target.value)} />
-                </div>
+                <div><label className={labelCls}>{t.customEndpoint}</label><input className={inputCls} placeholder="https://your-ngrok-url.ngrok.io" value={local.llm.customEndpoint || ''} onChange={(e) => updLLM('customEndpoint', e.target.value)} /></div>
               )}
-
               {!llmProvider?.hasAuth && local.llm.provider !== 'novelai' && (
                 <div>
                   <label className={labelCls}>
                     {t.model}
-                    {local.llm.provider === 'groq' && (
-                      <a href={GROQ_MODELS_URL} target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1">
-                        <ExternalLink size={12} /> {t.browseModels}
-                      </a>
-                    )}
-                    {local.llm.provider === 'openrouter' && (
-                      <a href={OPENROUTER_MODELS_URL} target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1">
-                        <ExternalLink size={12} /> {t.browseModels}
-                      </a>
-                    )}
-                    {local.llm.provider === 'gemini' && (
-                      <a href="https://ai.google.dev/gemini-api/docs/models/gemini" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1">
-                        <ExternalLink size={12} /> {t.browseModels}
-                      </a>
-                    )}
-                    {local.llm.provider === 'openai' && (
-                      <a href="https://platform.openai.com/docs/models" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1">
-                        <ExternalLink size={12} /> {t.browseModels}
-                      </a>
-                    )}
-                    {local.llm.provider === 'fireworks' && (
-                      <a href="https://fireworks.ai/models" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1">
-                        <ExternalLink size={12} /> {t.browseModels}
-                      </a>
-                    )}
-                    {local.llm.provider === 'perplexity' && (
-                      <a href="https://docs.perplexity.ai/guides/model-cards" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1">
-                        <ExternalLink size={12} /> {t.browseModels}
-                      </a>
-                    )}
-                    {local.llm.provider === 'mistral' && (
-                      <a href="https://docs.mistral.ai/getting-started/models/models_overview/" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1">
-                        <ExternalLink size={12} /> {t.browseModels}
-                      </a>
-                    )}
-                    {local.llm.provider === 'xai' && (
-                      <a href="https://docs.x.ai/docs/models" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1">
-                        <ExternalLink size={12} /> {t.browseModels}
-                      </a>
-                    )}
+                    {local.llm.provider === 'groq' && <a href={GROQ_MODELS_URL} target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1"><ExternalLink size={12} /> {t.browseModels}</a>}
+                    {local.llm.provider === 'openrouter' && <a href={OPENROUTER_MODELS_URL} target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1"><ExternalLink size={12} /> {t.browseModels}</a>}
+                    {local.llm.provider === 'gemini' && <a href="https://ai.google.dev/gemini-api/docs/models/gemini" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1"><ExternalLink size={12} /> {t.browseModels}</a>}
+                    {local.llm.provider === 'openai' && <a href="https://platform.openai.com/docs/models" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1"><ExternalLink size={12} /> {t.browseModels}</a>}
+                    {local.llm.provider === 'fireworks' && <a href="https://fireworks.ai/models" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1"><ExternalLink size={12} /> {t.browseModels}</a>}
+                    {local.llm.provider === 'perplexity' && <a href="https://docs.perplexity.ai/guides/model-cards" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1"><ExternalLink size={12} /> {t.browseModels}</a>}
+                    {local.llm.provider === 'mistral' && <a href="https://docs.mistral.ai/getting-started/models/models_overview/" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1"><ExternalLink size={12} /> {t.browseModels}</a>}
+                    {local.llm.provider === 'xai' && <a href="https://docs.x.ai/docs/models" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1"><ExternalLink size={12} /> {t.browseModels}</a>}
                   </label>
                   {local.llm.provider === 'groq' ? (
                     <div className="space-y-1">
                       <input list="groq-models" className={inputCls} value={local.llm.model} onChange={(e) => updLLM('model', e.target.value)} placeholder="Type or select model..." />
-                      <datalist id="groq-models">
-                        {GROQ_MODELS.map((m) => <option key={m} value={m} />)}
-                      </datalist>
+                      <datalist id="groq-models">{GROQ_MODELS.map((m) => <option key={m} value={m} />)}</datalist>
                     </div>
                   ) : (
                     <input className={inputCls} value={local.llm.model} onChange={(e) => updLLM('model', e.target.value)} placeholder="e.g. gpt-4o, claude-3-opus..." />
                   )}
                 </div>
               )}
-
               <div>
                 <label className={labelCls}>{t.temperature}: {local.llm.temperature.toFixed(1)}</label>
                 <input type="range" min="0" max="2" step="0.1" value={local.llm.temperature} onChange={(e) => updLLM('temperature', parseFloat(e.target.value))} className="w-full accent-violet-500" />
@@ -417,20 +322,12 @@ export default function SettingsModal() {
                   {TTS_PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </div>
-
               {ttsProvider?.hasAuth && (
                 <>
-                  <div>
-                    <label className={labelCls}>{t.email}</label>
-                    <input className={inputCls} type="email" value={local.tts.email || ''} onChange={(e) => updTTS('email', e.target.value)} />
-                  </div>
-                  <div>
-                    <label className={labelCls}>{t.password}</label>
-                    <input className={inputCls} type="password" value={local.tts.password || ''} onChange={(e) => updTTS('password', e.target.value)} />
-                  </div>
+                  <div><label className={labelCls}>{t.email}</label><input className={inputCls} type="email" value={local.tts.email || ''} onChange={(e) => updTTS('email', e.target.value)} /></div>
+                  <div><label className={labelCls}>{t.password}</label><input className={inputCls} type="password" value={local.tts.password || ''} onChange={(e) => updTTS('password', e.target.value)} /></div>
                   {local.tts.provider === 'novelai' && (
-                    <div>
-                      <label className={labelCls}>{t.voice}</label>
+                    <div><label className={labelCls}>{t.voice}</label>
                       <select className={inputCls} value={local.tts.voice} onChange={(e) => updTTS('voice', e.target.value)}>
                         {NOVELAI_VOICES.map((v) => <option key={v} value={v}>{v}</option>)}
                       </select>
@@ -438,67 +335,35 @@ export default function SettingsModal() {
                   )}
                 </>
               )}
-
               {ttsProvider?.hasKey && (
-                <div>
-                  <label className={labelCls}>{t.apiKey}</label>
-                  <input className={inputCls} type="password" value={local.tts.apiKey} onChange={(e) => updTTS('apiKey', e.target.value)} />
-                </div>
+                <div><label className={labelCls}>{t.apiKey}</label><input className={inputCls} type="password" value={local.tts.apiKey} onChange={(e) => updTTS('apiKey', e.target.value)} /></div>
               )}
-
               {ttsProvider?.hasEndpoint && (
-                <div>
-                  <label className={labelCls}>{t.customEndpoint}</label>
-                  <input className={inputCls} placeholder="http://localhost:50021" value={local.tts.customEndpoint || ''} onChange={(e) => updTTS('customEndpoint', e.target.value)} />
-                </div>
+                <div><label className={labelCls}>{t.customEndpoint}</label><input className={inputCls} placeholder="http://localhost:50021" value={local.tts.customEndpoint || ''} onChange={(e) => updTTS('customEndpoint', e.target.value)} /></div>
               )}
-
               {local.tts.provider === 'elevenlabs' && (
                 <>
                   <div>
-                    <label className={labelCls}>
-                      Model
-                      <a href="https://elevenlabs.io/docs/api-reference/text-to-speech" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1">
-                        <ExternalLink size={12} /> Docs
-                      </a>
-                    </label>
+                    <label className={labelCls}>Model <a href="https://elevenlabs.io/docs/api-reference/text-to-speech" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1"><ExternalLink size={12} /> Docs</a></label>
                     <select className={inputCls} value={local.tts.model} onChange={(e) => updTTS('model', e.target.value)}>
                       {ELEVENLABS_MODELS.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                     </select>
                   </div>
                   <div>
-                    <label className={labelCls}>
-                      Voice ID
-                      <a href="https://elevenlabs.io/voice-library" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1">
-                        <ExternalLink size={12} /> Voice Library
-                      </a>
-                    </label>
+                    <label className={labelCls}>Voice ID <a href="https://elevenlabs.io/voice-library" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1"><ExternalLink size={12} /> Voice Library</a></label>
                     <input className={inputCls} value={local.tts.voice} onChange={(e) => updTTS('voice', e.target.value)} placeholder="Voice ID..." />
                   </div>
                 </>
               )}
-
               {(local.tts.provider === 'google' || local.tts.provider === 'azure') && (
-                <div>
-                  <label className={labelCls}>{t.voice}</label>
-                  <input className={inputCls} value={local.tts.voice} onChange={(e) => updTTS('voice', e.target.value)} />
-                </div>
+                <div><label className={labelCls}>{t.voice}</label><input className={inputCls} value={local.tts.voice} onChange={(e) => updTTS('voice', e.target.value)} /></div>
               )}
-
               {['fish', 'cartesia', 'custom'].includes(local.tts.provider) && (
-                <div>
-                  <label className={labelCls}>{t.voice} / Reference ID</label>
-                  <input className={inputCls} value={local.tts.voice} onChange={(e) => updTTS('voice', e.target.value)} />
-                </div>
+                <div><label className={labelCls}>{t.voice} / Reference ID</label><input className={inputCls} value={local.tts.voice} onChange={(e) => updTTS('voice', e.target.value)} /></div>
               )}
-
               {['voicevox', 'aivis'].includes(local.tts.provider) && (
-                <div>
-                  <label className={labelCls}>Speaker ID (number)</label>
-                  <input className={inputCls} value={local.tts.voice} onChange={(e) => updTTS('voice', e.target.value)} placeholder="0" />
-                </div>
+                <div><label className={labelCls}>Speaker ID (number)</label><input className={inputCls} value={local.tts.voice} onChange={(e) => updTTS('voice', e.target.value)} placeholder="0" /></div>
               )}
-
               <div>
                 <label className={labelCls}>{t.speed}: {(local.tts.speed || 1).toFixed(1)}x</label>
                 <input type="range" min="0.5" max="2" step="0.1" value={local.tts.speed || 1} onChange={(e) => updTTS('speed', parseFloat(e.target.value))} className="w-full accent-violet-500" />
@@ -509,49 +374,25 @@ export default function SettingsModal() {
           {/* VRM */}
           {tab === 'vrm' && (
             <div className={sectionCls}>
-              <p className="text-xs text-gray-400">
-                Upload a custom VRM model to replace the default character. The file is stored locally in your browser session.
-              </p>
-
+              <p className="text-xs text-gray-400">Upload a custom VRM model to replace the default character. The file is stored locally in your browser session.</p>
               <div>
                 <label className={labelCls}>Current Model</label>
-                <div className="bg-dark-700 rounded-lg px-3 py-2 text-sm text-gray-300 border border-dark-500">
-                  {local.customVrmName || 'miko.vrm (default)'}
-                </div>
+                <div className="bg-dark-700 rounded-lg px-3 py-2 text-sm text-gray-300 border border-dark-500">{local.customVrmName || 'miko.vrm (default)'}</div>
               </div>
-
               <div>
                 <label className={labelCls}>Upload VRM File</label>
-                <input
-                  ref={vrmFileRef}
-                  type="file"
-                  accept=".vrm"
-                  className="hidden"
-                  onChange={handleVrmUpload}
-                />
-                <button
-                  onClick={() => vrmFileRef.current?.click()}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-dark-600 hover:bg-dark-500 border border-dark-400 border-dashed rounded-lg text-sm text-gray-300 hover:text-white transition-all"
-                >
-                  <Upload size={16} />
-                  Click to upload .vrm file
+                <input ref={vrmFileRef} type="file" accept=".vrm" className="hidden" onChange={handleVrmUpload} />
+                <button onClick={() => vrmFileRef.current?.click()} className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-dark-600 hover:bg-dark-500 border border-dark-400 border-dashed rounded-lg text-sm text-gray-300 hover:text-white transition-all">
+                  <Upload size={16} /> Click to upload .vrm file
                 </button>
               </div>
-
               {local.customVrmUrl && (
-                <button
-                  onClick={() => { upd('customVrmUrl', ''); upd('customVrmName', ''); }}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-900/30 hover:bg-red-800/50 border border-red-800/40 rounded-lg text-sm text-red-300 transition-all"
-                >
+                <button onClick={() => { upd('customVrmUrl', ''); upd('customVrmName', ''); }} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-900/30 hover:bg-red-800/50 border border-red-800/40 rounded-lg text-sm text-red-300 transition-all">
                   <Trash2 size={14} /> Reset to Default Model
                 </button>
               )}
-
               <div className="border-t border-dark-500 pt-3">
-                <p className="text-xs text-gray-500">
-                  Note: The VRM file URL is a temporary blob URL that expires when you close the browser tab.
-                  You may need to re-upload after refreshing.
-                </p>
+                <p className="text-xs text-gray-500">Note: The VRM file URL is a temporary blob URL that expires when you close the browser tab. You may need to re-upload after refreshing.</p>
               </div>
             </div>
           )}
@@ -560,54 +401,74 @@ export default function SettingsModal() {
           {tab === 'background' && (
             <div className={sectionCls}>
               <p className="text-xs text-gray-400">
-                Set the background color for the VTuber stage. Use green or blue for chroma key in OBS.
+                Set a solid background color or upload a custom image. The image is saved as a data URL and will persist across page reloads.
               </p>
 
-              <div>
-                <label className={labelCls}>Background Color</label>
-                <div className="flex gap-2 items-center">
-                  <input
-                    type="color"
-                    value={local.greenScreenColor}
-                    onChange={(e) => upd('greenScreenColor', e.target.value)}
-                    className="w-10 h-10 rounded cursor-pointer border-0 bg-transparent"
-                  />
-                  <input
-                    className={inputCls}
-                    value={local.greenScreenColor}
-                    onChange={(e) => upd('greenScreenColor', e.target.value)}
-                    placeholder="#00ff00"
-                  />
-                </div>
+              {/* --- Custom image section --- */}
+              <div className="border border-dark-500 rounded-xl p-4 space-y-3 bg-dark-700/40">
+                <p className="text-xs font-semibold text-accent-secondary uppercase tracking-wider">Custom Background Image</p>
+
+                {local.customBgDataUrl ? (
+                  <div className="space-y-2">
+                    {/* Preview */}
+                    <div className="w-full h-28 rounded-lg overflow-hidden border border-dark-500">
+                      <img src={local.customBgDataUrl} alt="bg preview" className="w-full h-full object-cover" />
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => bgFileRef.current?.click()}
+                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-dark-600 hover:bg-dark-500 border border-dark-400 rounded-lg text-sm text-gray-300 hover:text-white transition-all"
+                      >
+                        <Upload size={14} /> Replace Image
+                      </button>
+                      <button
+                        onClick={() => upd('customBgDataUrl', '')}
+                        className="flex items-center gap-2 px-3 py-2 bg-red-900/30 hover:bg-red-800/50 border border-red-800/40 rounded-lg text-sm text-red-300 transition-all"
+                      >
+                        <Trash2 size={14} /> Remove
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => bgFileRef.current?.click()}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-4 bg-dark-600 hover:bg-dark-500 border border-dark-400 border-dashed rounded-lg text-sm text-gray-300 hover:text-white transition-all"
+                  >
+                    <Upload size={16} /> Click to upload image (PNG, JPG, GIF, WebP…)
+                  </button>
+                )}
+                <input ref={bgFileRef} type="file" accept="image/*" className="hidden" onChange={handleBgUpload} />
+                {bgUploadError && <p className="text-xs text-yellow-400">{bgUploadError}</p>}
+                <p className="text-xs text-gray-500">When a background image is set, the solid color below is ignored for the stage. The image is stored in your browser's local storage and survives page reloads.</p>
               </div>
 
-              <div>
-                <label className={labelCls}>Presets</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {BG_PRESETS.map((preset) => (
-                    <button
-                      key={preset.value}
-                      onClick={() => upd('greenScreenColor', preset.value)}
-                      className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm border transition-all ${
-                        local.greenScreenColor === preset.value
-                          ? 'border-accent-primary bg-accent-primary/20 text-white'
-                          : 'border-dark-500 bg-dark-600 text-gray-300 hover:border-gray-400'
-                      }`}
-                    >
-                      <div
-                        className="w-5 h-5 rounded border border-gray-600 flex-shrink-0"
-                        style={{ background: preset.value }}
-                      />
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="border-t border-dark-500 pt-3">
-                <p className="text-xs text-gray-500">
-                  In OBS: Add a Browser Source or Window Capture, then apply a Chroma Key filter matching the chosen color.
+              {/* --- Solid color section --- */}
+              <div className="border border-dark-500 rounded-xl p-4 space-y-3 bg-dark-700/40">
+                <p className="text-xs font-semibold text-accent-secondary uppercase tracking-wider">
+                  Solid Color {local.customBgDataUrl ? <span className="text-gray-500 font-normal">(overridden by image above)</span> : ''}
                 </p>
+                <div>
+                  <label className={labelCls}>Background Color</label>
+                  <div className="flex gap-2 items-center">
+                    <input type="color" value={local.greenScreenColor} onChange={(e) => upd('greenScreenColor', e.target.value)} className="w-10 h-10 rounded cursor-pointer border-0 bg-transparent" />
+                    <input className={inputCls} value={local.greenScreenColor} onChange={(e) => upd('greenScreenColor', e.target.value)} placeholder="#00ff00" />
+                  </div>
+                </div>
+                <div>
+                  <label className={labelCls}>Presets</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {BG_PRESETS.map((preset) => (
+                      <button key={preset.value} onClick={() => { upd('greenScreenColor', preset.value); upd('customBgDataUrl', ''); }}
+                        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm border transition-all ${local.greenScreenColor === preset.value && !local.customBgDataUrl ? 'border-accent-primary bg-accent-primary/20 text-white' : 'border-dark-500 bg-dark-600 text-gray-300 hover:border-gray-400'}`}>
+                        <div className="w-5 h-5 rounded border border-gray-600 flex-shrink-0" style={{ background: preset.value }} />
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="border-t border-dark-500 pt-3">
+                  <p className="text-xs text-gray-500">In OBS: Add a Browser Source or Window Capture, then apply a Chroma Key filter matching the chosen color.</p>
+                </div>
               </div>
             </div>
           )}
@@ -615,49 +476,26 @@ export default function SettingsModal() {
           {/* CAPTION */}
           {tab === 'caption' && (
             <div className={sectionCls}>
-              <p className="text-xs text-gray-400">
-                Customize the captions displayed when the VTuber speaks.
-              </p>
-
+              <p className="text-xs text-gray-400">Customize the captions displayed when the VTuber speaks.</p>
               <div>
                 <label className={labelCls}>Caption Color</label>
                 <div className="flex gap-2 items-center">
-                  <input
-                    type="color"
-                    value={local.caption?.color ?? '#ffffff'}
-                    onChange={(e) => updCaption('color', e.target.value)}
-                    className="w-10 h-10 rounded cursor-pointer border-0 bg-transparent"
-                  />
-                  <input
-                    className={inputCls}
-                    value={local.caption?.color ?? '#ffffff'}
-                    onChange={(e) => updCaption('color', e.target.value)}
-                    placeholder="#ffffff"
-                  />
+                  <input type="color" value={local.caption?.color ?? '#ffffff'} onChange={(e) => updCaption('color', e.target.value)} className="w-10 h-10 rounded cursor-pointer border-0 bg-transparent" />
+                  <input className={inputCls} value={local.caption?.color ?? '#ffffff'} onChange={(e) => updCaption('color', e.target.value)} placeholder="#ffffff" />
                 </div>
               </div>
-
               <div>
                 <label className={labelCls}>Caption Font</label>
-                <select
-                  className={inputCls}
-                  value={local.caption?.font ?? local.font}
-                  onChange={(e) => updCaption('font', e.target.value)}
-                >
+                <select className={inputCls} value={local.caption?.font ?? local.font} onChange={(e) => updCaption('font', e.target.value)}>
                   <option value="comic">Comic Sans MS</option>
                   <option value="arial">Arial</option>
                   <option value="montserrat">Montserrat</option>
                   <option value="verdana">Verdana</option>
                 </select>
               </div>
-
               <div>
                 <label className={labelCls}>Caption Size</label>
-                <select
-                  className={inputCls}
-                  value={local.caption?.size ?? 'base'}
-                  onChange={(e) => updCaption('size', e.target.value)}
-                >
+                <select className={inputCls} value={local.caption?.size ?? 'base'} onChange={(e) => updCaption('size', e.target.value)}>
                   <option value="sm">Small</option>
                   <option value="base">Medium (Default)</option>
                   <option value="lg">Large</option>
@@ -665,19 +503,16 @@ export default function SettingsModal() {
                   <option value="2xl">2X Large</option>
                 </select>
               </div>
-
               <div>
                 <label className={labelCls}>Preview</label>
                 <div className="bg-gray-500/30 rounded-lg p-6 flex items-center justify-center min-h-16">
-                  <p
-                    style={{
-                      fontFamily: local.caption?.font ? FONT_MAP[local.caption.font as keyof typeof FONT_MAP] : FONT_MAP[local.font],
-                      color: local.caption?.color ?? '#ffffff',
-                      fontSize: { sm: '0.875rem', base: '1rem', lg: '1.125rem', xl: '1.25rem', '2xl': '1.5rem' }[local.caption?.size ?? 'base'],
-                      fontWeight: 700,
-                      textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000',
-                    }}
-                  >
+                  <p style={{
+                    fontFamily: local.caption?.font ? FONT_MAP[local.caption.font as keyof typeof FONT_MAP] : FONT_MAP[local.font],
+                    color: local.caption?.color ?? '#ffffff',
+                    fontSize: { sm: '0.875rem', base: '1rem', lg: '1.125rem', xl: '1.25rem', '2xl': '1.5rem' }[local.caption?.size ?? 'base'],
+                    fontWeight: 700,
+                    textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
+                  }}>
                     This is how your captions will look! ✨
                   </p>
                 </div>
@@ -692,17 +527,9 @@ export default function SettingsModal() {
                 <input type="checkbox" className="w-4 h-4 accent-violet-500" checked={local.twitch.enabled} onChange={(e) => updTwitch('enabled', e.target.checked)} />
                 <span className="text-sm text-white">{t.enableTwitch}</span>
               </label>
+              <div><label className={labelCls}>{t.twitchChannel}</label><input className={inputCls} value={local.twitch.channelName} onChange={(e) => updTwitch('channelName', e.target.value)} placeholder="your_channel" /></div>
               <div>
-                <label className={labelCls}>{t.twitchChannel}</label>
-                <input className={inputCls} value={local.twitch.channelName} onChange={(e) => updTwitch('channelName', e.target.value)} placeholder="your_channel" />
-              </div>
-              <div>
-                <label className={labelCls}>
-                  {t.twitchToken}
-                  <a href="https://twitchtokengenerator.com" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1">
-                    <ExternalLink size={12} /> Get Token
-                  </a>
-                </label>
+                <label className={labelCls}>{t.twitchToken} <a href="https://twitchtokengenerator.com" target="_blank" rel="noreferrer" className="ml-2 text-accent-secondary hover:underline inline-flex items-center gap-1"><ExternalLink size={12} /> Get Token</a></label>
                 <input className={inputCls} type="password" value={local.twitch.accessToken || ''} onChange={(e) => updTwitch('accessToken', e.target.value)} placeholder="oauth:..." />
               </div>
               <label className="flex items-center gap-2 cursor-pointer">
@@ -760,9 +587,7 @@ export default function SettingsModal() {
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-dark-500">
-          <button onClick={() => setSettingsOpen(false)} className="px-4 py-2 rounded-lg text-sm text-gray-400 hover:text-white transition-colors">
-            {t.close}
-          </button>
+          <button onClick={() => setSettingsOpen(false)} className="px-4 py-2 rounded-lg text-sm text-gray-400 hover:text-white transition-colors">{t.close}</button>
           <button onClick={save} className="px-6 py-2 rounded-lg text-sm bg-accent-primary hover:bg-violet-500 text-white font-medium transition-all flex items-center gap-2">
             <Save size={14} /> {t.save}
           </button>
