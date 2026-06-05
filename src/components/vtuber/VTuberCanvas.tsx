@@ -7,8 +7,22 @@ import { useStore } from '@/store';
 
 interface Props {
   className?: string;
-  /** When true the Three.js renderer uses alpha=true and clears to transparent */
   transparent?: boolean;
+}
+
+/** Detect VRM spec version from the loaded GLTF */
+function getVRMVersion(gltf: any): 0 | 1 {
+  // VRM 0.x stores metadata under extensions.VRM
+  const ext = gltf?.parser?.json?.extensions;
+  if (ext?.VRM) return 0;
+  // VRM 1.x stores it under extensions.VRMC_vrm
+  if (ext?.VRMC_vrm) return 1;
+  // Fallback: check userData populated by the VRMLoaderPlugin
+  const vrm = gltf?.userData?.vrm;
+  if (vrm?.meta?.specVersion) {
+    return vrm.meta.specVersion.startsWith('1') ? 1 : 0;
+  }
+  return 1; // safe default
 }
 
 export default function VTuberCanvas({ className, transparent = false }: Props) {
@@ -28,8 +42,6 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
 
     const scene = new THREE.Scene();
 
-    // In transparent mode (gaming overlay) always clear to transparent.
-    // Otherwise respect the user's green-screen / custom-bg setting.
     const hasCustomBg = !!settings.customBgDataUrl;
     if (transparent) {
       scene.background = null;
@@ -56,6 +68,7 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
     }
     el.appendChild(renderer.domElement);
 
+    // Lights
     const ambient = new THREE.AmbientLight(0xffffff, 0.8);
     scene.add(ambient);
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -71,8 +84,7 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
     const anim = {
       blinkTimer: 0, blinkPhase: 0 as number,
       floatTimer: 0, mouthTimer: 0, breathTimer: 0,
-      headSwayTimer: 0, tailTimer: 0,
-      armSettleTimer: 0, armsSettled: false,
+      headSwayTimer: 0,
     };
 
     const vrmUrl = settings.customVrmUrl || '/vrm/miko.vrm';
@@ -84,22 +96,43 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
       (gltf) => {
         const vrm = gltf.userData.vrm;
         if (!vrm) { setLoadStatus('error'); return; }
+
         VRMUtils.removeUnnecessaryVertices(gltf.scene);
         VRMUtils.combineSkeletons(gltf.scene);
-        vrm.scene.rotation.y = 0;
+
+        const version = getVRMVersion(gltf);
+
+        if (version === 0) {
+          // VRM 0.x: model faces +Z (away from camera), rotate 180° to face -Z (toward camera)
+          vrm.scene.rotation.y = Math.PI;
+        } else {
+          // VRM 1.x: model already faces -Z (toward camera)
+          vrm.scene.rotation.y = 0;
+        }
+
         scene.add(vrm.scene);
         vrmRef.current = vrm;
 
+        // ── Pose arms down immediately to avoid T-pose flash ──────────
         const hb = vrm.humanoid;
-        const leftUpperArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftUpperArm);
-        const rightUpperArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightUpperArm);
-        const leftLowerArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftLowerArm);
-        const rightLowerArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightLowerArm);
 
-        if (leftUpperArm) { leftUpperArm.rotation.z = -1.2; leftUpperArm.rotation.x = 0.1; }
-        if (rightUpperArm) { rightUpperArm.rotation.z = 1.2; rightUpperArm.rotation.x = 0.1; }
-        if (leftLowerArm) leftLowerArm.rotation.z = 0.1;
-        if (rightLowerArm) rightLowerArm.rotation.z = -0.1;
+        const poseArm = (boneName: VRMHumanBoneName, zRot: number) => {
+          const bone = hb?.getNormalizedBoneNode(boneName);
+          if (!bone) return;
+          bone.rotation.z = zRot;
+          bone.rotation.x = 0.1;
+        };
+
+        const poseLower = (boneName: VRMHumanBoneName, zRot: number) => {
+          const bone = hb?.getNormalizedBoneNode(boneName);
+          if (!bone) return;
+          bone.rotation.z = zRot;
+        };
+
+        poseArm(VRMHumanBoneName.LeftUpperArm, -1.2);
+        poseArm(VRMHumanBoneName.RightUpperArm, 1.2);
+        poseLower(VRMHumanBoneName.LeftLowerArm, 0.1);
+        poseLower(VRMHumanBoneName.RightLowerArm, -0.1);
 
         setLoadStatus('ready');
       },
@@ -122,23 +155,20 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
       anim.headSwayTimer += delta;
       anim.mouthTimer += delta;
       anim.blinkTimer += delta;
-      anim.tailTimer += delta;
-      anim.armSettleTimer += delta;
 
       const eb = vrm.expressionManager;
       const hb = vrm.humanoid;
 
-      const floatY = Math.sin(anim.floatTimer * 1.1) * 0.025;
-      vrm.scene.position.y = floatY;
+      // Float
+      vrm.scene.position.y = Math.sin(anim.floatTimer * 1.1) * 0.025;
 
+      // Head sway
       const headBone = hb?.getNormalizedBoneNode(VRMHumanBoneName.Head);
       if (headBone) {
         const targetZ = isThinking ? 0.18 : Math.sin(anim.headSwayTimer * 0.45) * 0.04;
-        const targetX = Math.sin(anim.headSwayTimer * 0.6) * 0.02;
-        const targetY = Math.sin(anim.headSwayTimer * 0.3) * 0.03;
         headBone.rotation.z += (targetZ - headBone.rotation.z) * 0.06;
-        headBone.rotation.x += (targetX - headBone.rotation.x) * 0.06;
-        headBone.rotation.y += (targetY - headBone.rotation.y) * 0.06;
+        headBone.rotation.x += (Math.sin(anim.headSwayTimer * 0.6) * 0.02 - headBone.rotation.x) * 0.06;
+        headBone.rotation.y += (Math.sin(anim.headSwayTimer * 0.3) * 0.03 - headBone.rotation.y) * 0.06;
       }
 
       const neckBone = hb?.getNormalizedBoneNode(VRMHumanBoneName.Neck);
@@ -147,27 +177,26 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
       const spineBone = hb?.getNormalizedBoneNode(VRMHumanBoneName.Spine);
       if (spineBone) spineBone.rotation.x = Math.sin(anim.breathTimer * 0.9) * 0.012;
 
-      const leftUpperArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftUpperArm);
-      const rightUpperArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightUpperArm);
-      const leftLowerArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftLowerArm);
-      const rightLowerArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightLowerArm);
+      // Arms idle hang with gentle sway
+      const leftUpper = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftUpperArm);
+      const rightUpper = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightUpperArm);
+      const leftLower = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftLowerArm);
+      const rightLower = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightLowerArm);
 
-      if (leftUpperArm) {
-        const targetZ = -1.2 + Math.sin(anim.floatTimer * 0.8) * 0.04;
-        const targetX = 0.1 + Math.sin(anim.floatTimer * 0.6) * 0.02;
-        leftUpperArm.rotation.z += (targetZ - leftUpperArm.rotation.z) * 0.08;
-        leftUpperArm.rotation.x += (targetX - leftUpperArm.rotation.x) * 0.08;
+      if (leftUpper) {
+        leftUpper.rotation.z += ((-1.2 + Math.sin(anim.floatTimer * 0.8) * 0.04) - leftUpper.rotation.z) * 0.08;
+        leftUpper.rotation.x += ((0.1 + Math.sin(anim.floatTimer * 0.6) * 0.02) - leftUpper.rotation.x) * 0.08;
       }
-      if (rightUpperArm) {
-        const targetZ = 1.2 + Math.sin(anim.floatTimer * 0.8 + 0.5) * 0.04;
-        const targetX = 0.1 + Math.sin(anim.floatTimer * 0.6 + 0.5) * 0.02;
-        rightUpperArm.rotation.z += (targetZ - rightUpperArm.rotation.z) * 0.08;
-        rightUpperArm.rotation.x += (targetX - rightUpperArm.rotation.x) * 0.08;
+      if (rightUpper) {
+        rightUpper.rotation.z += ((1.2 + Math.sin(anim.floatTimer * 0.8 + 0.5) * 0.04) - rightUpper.rotation.z) * 0.08;
+        rightUpper.rotation.x += ((0.1 + Math.sin(anim.floatTimer * 0.6 + 0.5) * 0.02) - rightUpper.rotation.x) * 0.08;
       }
-      if (leftLowerArm) leftLowerArm.rotation.z += (0.1 - leftLowerArm.rotation.z) * 0.05;
-      if (rightLowerArm) rightLowerArm.rotation.z += (-0.1 - rightLowerArm.rotation.z) * 0.05;
+      if (leftLower) leftLower.rotation.z += (0.1 - leftLower.rotation.z) * 0.05;
+      if (rightLower) rightLower.rotation.z += (-0.1 - rightLower.rotation.z) * 0.05;
 
+      // Expressions
       if (eb) {
+        // Blink
         if (anim.blinkTimer > 3.5 + Math.random() * 2.5 && anim.blinkPhase === 0) {
           anim.blinkPhase = 1; anim.blinkTimer = 0;
         }
@@ -181,12 +210,12 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
           if (v <= 0) { anim.blinkPhase = 0; anim.blinkTimer = 0; }
         }
 
+        // Mouth / lip sync
         if (isSpeaking) {
           const t = anim.mouthTimer;
-          const phase = (t * 4.5) % (Math.PI * 2);
-          const openAmount = (Math.sin(phase) * 0.5 + 0.5) * 0.85;
-          const visemeIdx = Math.floor(t * 3.5) % 5;
+          const openAmount = (Math.sin(t * 4.5 % (Math.PI * 2)) * 0.5 + 0.5) * 0.85;
           const visemes = ['aa', 'ih', 'ou', 'ee', 'oh'];
+          const visemeIdx = Math.floor(t * 3.5) % 5;
           ['aa', 'ih', 'ou', 'ee', 'oh', 'nn'].forEach((v) => { try { eb.setValue(v, 0); } catch {} });
           try { eb.setValue(visemes[visemeIdx], openAmount); } catch {}
           try { eb.setValue('happy', Math.sin(t * 2) * 0.1 + 0.1); } catch {}
