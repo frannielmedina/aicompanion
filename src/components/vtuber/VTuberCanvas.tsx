@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils, VRMHumanBoneName } from '@pixiv/three-vrm';
 import { useStore } from '@/store';
+import type { VTuberExpression } from '@/lib/expression';
 
 interface Props {
   className?: string;
@@ -19,17 +20,32 @@ function getVRMVersion(gltf: any): 0 | 1 {
   return 1;
 }
 
+// Map our expression names to VRM expression preset names
+// Each entry lists the presets to blend and their weights
+const EXPRESSION_PRESETS: Record<VTuberExpression, Array<{ name: string; weight: number }>> = {
+  happy:   [{ name: 'happy', weight: 1.0 }, { name: 'relaxed', weight: 0.2 }],
+  angry:   [{ name: 'angry', weight: 1.0 }],
+  sad:     [{ name: 'sad', weight: 1.0 }],
+  relaxed: [{ name: 'relaxed', weight: 1.0 }],
+  neutral: [],
+};
+
+// All expression preset names we might touch (for cleanup)
+const ALL_EXPRESSION_PRESETS = ['happy', 'angry', 'sad', 'relaxed', 'surprised', 'thinking'];
+
 export default function VTuberCanvas({ className, transparent = false }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
-  const { isSpeaking, isThinking, settings } = useStore();
+  const { isSpeaking, isThinking, currentExpression, settings } = useStore();
   const vrmRef = useRef<any>(null);
   const vrmVersionRef = useRef<0 | 1>(1);
   const clockRef = useRef(new THREE.Clock());
-  const stateRef = useRef({ isSpeaking: false, isThinking: false });
+  const stateRef = useRef({ isSpeaking: false, isThinking: false, currentExpression: 'neutral' as VTuberExpression });
   const [loadStatus, setLoadStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [loadProgress, setLoadProgress] = useState(0);
 
-  useEffect(() => { stateRef.current = { isSpeaking, isThinking }; }, [isSpeaking, isThinking]);
+  useEffect(() => {
+    stateRef.current = { isSpeaking, isThinking, currentExpression };
+  }, [isSpeaking, isThinking, currentExpression]);
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -68,7 +84,17 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
     rimLight.position.set(0, 2, -1);
     scene.add(rimLight);
 
-    const anim = { blinkTimer: 0, blinkPhase: 0 as number, floatTimer: 0, mouthTimer: 0, breathTimer: 0, headSwayTimer: 0 };
+    const anim = {
+      blinkTimer: 0,
+      blinkPhase: 0 as number,
+      floatTimer: 0,
+      mouthTimer: 0,
+      breathTimer: 0,
+      headSwayTimer: 0,
+      expressionTimer: 0,
+      prevExpression: 'neutral' as VTuberExpression,
+      expressionBlend: 0, // 0→1 transition progress
+    };
 
     const vrmUrl = settings.customVrmUrl || '/vrm/miko.vrm';
     const loader = new GLTFLoader();
@@ -85,18 +111,11 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
 
         const version = getVRMVersion(gltf);
         vrmVersionRef.current = version;
-
-        // VRM 0.x faces +Z (back to camera) → rotate 180° to face camera
         vrm.scene.rotation.y = version === 0 ? Math.PI : 0;
 
         scene.add(vrm.scene);
         vrmRef.current = vrm;
 
-        // ── Pose arms down ───────────────────────────────────────────
-        // For VRM 0.x, the normalized humanoid API from @pixiv/three-vrm
-        // re-maps bones so that the coordinate system matches VRM 1.x.
-        // HOWEVER the scene is rotated 180° on Y, which mirrors left/right,
-        // so we need to flip the Z sign for arm bones.
         const hb = vrm.humanoid;
 
         const setBone = (name: VRMHumanBoneName, rx: number, ry: number, rz: number) => {
@@ -106,8 +125,6 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
         };
 
         if (version === 0) {
-          // Mirrored Z because the whole scene is rotated 180° on Y.
-          // Positive Z now brings arms down for both sides.
           setBone(VRMHumanBoneName.LeftUpperArm,  0.1, 0,  1.2);
           setBone(VRMHumanBoneName.RightUpperArm, 0.1, 0, -1.2);
           setBone(VRMHumanBoneName.LeftLowerArm,  0,   0, -0.1);
@@ -126,20 +143,29 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
     );
 
     let animId: number;
+
+    /**
+     * Safely set a VRM expression value, trying multiple common preset name variants.
+     */
+    const trySetExpression = (eb: any, name: string, value: number) => {
+      try { eb.setValue(name, value); } catch {}
+    };
+
     const animate = () => {
       animId = requestAnimationFrame(animate);
       const delta = clockRef.current.getDelta();
       const vrm = vrmRef.current;
       if (!vrm) { renderer.render(scene, camera); return; }
 
-      const { isSpeaking, isThinking } = stateRef.current;
+      const { isSpeaking, isThinking, currentExpression } = stateRef.current;
       const version = vrmVersionRef.current;
 
-      anim.floatTimer   += delta;
-      anim.breathTimer  += delta;
-      anim.headSwayTimer+= delta;
-      anim.mouthTimer   += delta;
-      anim.blinkTimer   += delta;
+      anim.floatTimer    += delta;
+      anim.breathTimer   += delta;
+      anim.headSwayTimer += delta;
+      anim.mouthTimer    += delta;
+      anim.blinkTimer    += delta;
+      anim.expressionTimer += delta;
 
       const eb = vrm.expressionManager;
       const hb = vrm.humanoid;
@@ -147,12 +173,28 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
       // Float
       vrm.scene.position.y = Math.sin(anim.floatTimer * 1.1) * 0.025;
 
-      // Head sway
+      // Head sway — angry tilts more, sad droops, happy bounces
       const headBone = hb?.getNormalizedBoneNode(VRMHumanBoneName.Head);
       if (headBone) {
-        const targetZ = isThinking ? 0.18 : Math.sin(anim.headSwayTimer * 0.45) * 0.04;
+        let targetZ = Math.sin(anim.headSwayTimer * 0.45) * 0.04;
+        let targetX = Math.sin(anim.headSwayTimer * 0.6) * 0.02;
+
+        if (isThinking) {
+          targetZ = 0.18;
+        } else if (currentExpression === 'angry') {
+          targetZ = Math.sin(anim.headSwayTimer * 1.2) * 0.06; // agitated shaking
+          targetX = 0.04; // slight forward lean
+        } else if (currentExpression === 'sad') {
+          targetZ = 0.1;
+          targetX = 0.08; // drooping forward
+        } else if (currentExpression === 'happy') {
+          targetZ = Math.sin(anim.headSwayTimer * 0.9) * 0.06; // more energetic sway
+        } else if (currentExpression === 'relaxed') {
+          targetZ = Math.sin(anim.headSwayTimer * 0.3) * 0.025; // slow, calm sway
+        }
+
         headBone.rotation.z += (targetZ - headBone.rotation.z) * 0.06;
-        headBone.rotation.x += (Math.sin(anim.headSwayTimer * 0.6) * 0.02 - headBone.rotation.x) * 0.06;
+        headBone.rotation.x += (targetX - headBone.rotation.x) * 0.06;
         headBone.rotation.y += (Math.sin(anim.headSwayTimer * 0.3) * 0.03 - headBone.rotation.y) * 0.06;
       }
 
@@ -162,7 +204,7 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
       const spineBone = hb?.getNormalizedBoneNode(VRMHumanBoneName.Spine);
       if (spineBone) spineBone.rotation.x = Math.sin(anim.breathTimer * 0.9) * 0.012;
 
-      // Arms — sign of Z flipped for VRM 0.x (mirrored world)
+      // Arms
       const zSign = version === 0 ? -1 : 1;
 
       const leftUpper  = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftUpperArm);
@@ -183,38 +225,78 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
       if (leftLower)  leftLower.rotation.z  += (zSign *  0.1 - leftLower.rotation.z)  * 0.05;
       if (rightLower) rightLower.rotation.z += (zSign * -0.1 - rightLower.rotation.z) * 0.05;
 
-      // Expressions
+      // ── Expressions ─────────────────────────────────────────────────────
       if (eb) {
-        // Blink
-        if (anim.blinkTimer > 3.5 + Math.random() * 2.5 && anim.blinkPhase === 0) {
-          anim.blinkPhase = 1; anim.blinkTimer = 0;
-        }
-        if (anim.blinkPhase === 1) {
-          const v = Math.min(1, anim.blinkTimer * 14);
-          eb.setValue('blink', v);
-          if (v >= 1) { anim.blinkPhase = 2; anim.blinkTimer = 0; }
-        } else if (anim.blinkPhase === 2) {
-          const v = Math.max(0, 1 - anim.blinkTimer * 14);
-          eb.setValue('blink', v);
-          if (v <= 0) { anim.blinkPhase = 0; anim.blinkTimer = 0; }
+        // --- Blink (suppress during strong expressions or angry) ---
+        const suppressBlink = currentExpression === 'angry';
+        if (!suppressBlink) {
+          if (anim.blinkTimer > 3.5 + Math.random() * 2.5 && anim.blinkPhase === 0) {
+            anim.blinkPhase = 1; anim.blinkTimer = 0;
+          }
+          if (anim.blinkPhase === 1) {
+            const v = Math.min(1, anim.blinkTimer * 14);
+            trySetExpression(eb, 'blink', v);
+            if (v >= 1) { anim.blinkPhase = 2; anim.blinkTimer = 0; }
+          } else if (anim.blinkPhase === 2) {
+            const v = Math.max(0, 1 - anim.blinkTimer * 14);
+            trySetExpression(eb, 'blink', v);
+            if (v <= 0) { anim.blinkPhase = 0; anim.blinkTimer = 0; }
+          }
+        } else {
+          // Wide open eyes when angry — reset blink
+          trySetExpression(eb, 'blink', 0);
+          anim.blinkPhase = 0;
+          anim.blinkTimer = 0;
         }
 
-        // Mouth
+        // --- Smooth expression transition ---
+        if (currentExpression !== anim.prevExpression) {
+          anim.expressionTimer = 0;
+          anim.prevExpression = currentExpression;
+          anim.expressionBlend = 0;
+        }
+        // Blend speed: transition in ~0.4 seconds
+        anim.expressionBlend = Math.min(1, anim.expressionBlend + delta * 2.5);
+        const blend = anim.expressionBlend;
+
+        // Clear all expression presets first
+        ALL_EXPRESSION_PRESETS.forEach((name) => trySetExpression(eb, name, 0));
+
+        // Apply target expression presets with blend factor
+        const targets = EXPRESSION_PRESETS[currentExpression];
+        targets.forEach(({ name, weight }) => {
+          trySetExpression(eb, name, weight * blend);
+        });
+
+        // --- Thinking override (layered on top) ---
+        if (isThinking) {
+          trySetExpression(eb, 'thinking', Math.min(1, anim.headSwayTimer * 2));
+        }
+
+        // --- Mouth / lip sync ---
         if (isSpeaking) {
           const t = anim.mouthTimer;
           const openAmount = (Math.sin((t * 4.5) % (Math.PI * 2)) * 0.5 + 0.5) * 0.85;
-          const visemes = ['aa', 'ih', 'ou', 'ee', 'oh'];
-          ['aa', 'ih', 'ou', 'ee', 'oh', 'nn'].forEach((v) => { try { eb.setValue(v, 0); } catch {} });
-          try { eb.setValue(visemes[Math.floor(t * 3.5) % 5], openAmount); } catch {}
-          try { eb.setValue('happy', Math.sin(t * 2) * 0.1 + 0.1); } catch {}
+
+          // Vary visemes by expression
+          let visemes: string[];
+          if (currentExpression === 'angry') {
+            visemes = ['aa', 'oh', 'aa', 'ou', 'aa']; // more open, punchy
+          } else if (currentExpression === 'sad') {
+            visemes = ['ih', 'nn', 'ih', 'ee', 'ih']; // quieter, subdued
+          } else if (currentExpression === 'happy') {
+            visemes = ['aa', 'ih', 'ee', 'aa', 'oh']; // bright, varied
+          } else {
+            visemes = ['aa', 'ih', 'ou', 'ee', 'oh'];
+          }
+
+          ['aa', 'ih', 'ou', 'ee', 'oh', 'nn'].forEach((v) => trySetExpression(eb, v, 0));
+          trySetExpression(eb, visemes[Math.floor(t * 3.5) % 5], openAmount);
         } else {
           ['aa', 'ih', 'ou', 'ee', 'oh', 'nn', 'a', 'i', 'u', 'e', 'o'].forEach((v) => {
-            try { eb.setValue(v, 0); } catch {}
+            trySetExpression(eb, v, 0);
           });
         }
-
-        if (isThinking) { try { eb.setValue('thinking', Math.min(1, anim.headSwayTimer * 2)); } catch {} }
-        else { try { eb.setValue('thinking', 0); } catch {} }
       }
 
       vrm.update(delta);
