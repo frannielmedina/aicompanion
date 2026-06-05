@@ -6,18 +6,26 @@ import { callLLM } from '@/lib/llm';
 import { synthesizeSpeech, playAudioBuffer } from '@/lib/tts';
 import { translations } from '@/lib/i18n';
 import { FONT_MAP } from '@/lib/fonts';
+import { parseExpression, EXPRESSION_SYSTEM_PROMPT_ADDITION } from '@/lib/expression';
 
 /** Strip <think>…</think> blocks (including partial/unclosed ones) from model output */
 function stripThinkTags(text: string): string {
-  // Remove complete <think>...</think> blocks
   let result = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
-  // Remove unclosed <think> blocks (reasoning that bleeds to end of string)
   result = result.replace(/<think>[\s\S]*/gi, '');
   return result.trim();
 }
 
 export default function ChatPanel() {
-  const { settings, chatHistory, addChat, clearChat, setIsSpeaking, setIsThinking, setCurrentCaption } = useStore();
+  const {
+    settings,
+    chatHistory,
+    addChat,
+    clearChat,
+    setIsSpeaking,
+    setIsThinking,
+    setCurrentCaption,
+    setCurrentExpression,
+  } = useStore();
   const t = translations[settings.language];
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -37,17 +45,30 @@ export default function ChatPanel() {
     setIsThinking(true);
     setCurrentCaption('');
 
+    // Build augmented system prompt with expression instructions
+    const augmentedSystemPrompt = settings.systemPrompt + EXPRESSION_SYSTEM_PROMPT_ADDITION;
+
     try {
-      const raw = await callLLM(settings.llm, [...chatHistory, { role: 'user', content: msg }], settings.systemPrompt);
-      const response = stripThinkTags(raw);
-      addChat({ role: 'assistant', content: response });
+      const raw = await callLLM(
+        settings.llm,
+        [...chatHistory, { role: 'user', content: msg }],
+        augmentedSystemPrompt,
+      );
+      const stripped = stripThinkTags(raw);
+
+      // Parse expression tag — cleanText has the tag removed
+      const { expression, cleanText } = parseExpression(stripped);
+
+      // Store history WITHOUT the expression tag (clean for display)
+      addChat({ role: 'assistant', content: cleanText });
       setIsThinking(false);
-      setCurrentCaption(response);
+      setCurrentExpression(expression);
+      setCurrentCaption(cleanText);
 
       if (settings.tts.apiKey || settings.tts.provider === 'voicevox' || settings.tts.provider === 'aivis' || settings.tts.email) {
         setIsSpeaking(true);
         try {
-          const audio = await synthesizeSpeech(settings.tts, response);
+          const audio = await synthesizeSpeech(settings.tts, cleanText);
           if (audio) await playAudioBuffer(audio);
         } catch (e) {
           console.error('TTS Error:', e);
@@ -55,11 +76,16 @@ export default function ChatPanel() {
         setIsSpeaking(false);
       }
 
-      setTimeout(() => setCurrentCaption(''), 8000);
+      // Reset expression to neutral after caption fades
+      setTimeout(() => {
+        setCurrentCaption('');
+        setCurrentExpression('neutral');
+      }, 8000);
     } catch (e: any) {
       const errMsg = `Error: ${e.message}`;
       addChat({ role: 'assistant', content: errMsg });
       setCurrentCaption(errMsg);
+      setCurrentExpression('neutral');
       setIsThinking(false);
     }
     setLoading(false);
@@ -93,6 +119,7 @@ export default function ChatPanel() {
               {msg.role === 'assistant' && (
                 <span className="text-xs text-accent-secondary font-bold block mb-1">{settings.vtuberName}</span>
               )}
+              {/* content is already clean — no expression tag */}
               {msg.content}
             </div>
           </div>
