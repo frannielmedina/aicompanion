@@ -30,9 +30,10 @@ export interface TTSConfig {
 export interface TwitchConfig {
   enabled: boolean;
   channelName: string;
-  accessToken?: string;
+  accessToken?: string;       // optional — anonymous read if omitted
   showOverlay: boolean;
   showEmoteWall: boolean;
+  aiRespondsToChat: boolean;  // whether the AI reads & responds to chat
 }
 
 export interface GamingModeConfig {
@@ -151,8 +152,10 @@ const defaultSettings: Settings = {
   twitch: {
     enabled: false,
     channelName: '',
+    accessToken: '',
     showOverlay: true,
     showEmoteWall: true,
+    aiRespondsToChat: false,
   },
   gaming: {
     enabled: false,
