@@ -4,6 +4,7 @@ import { useStore } from '@/store';
 import { captureFrame, callVisionLLM } from '@/lib/vision';
 import { callLLM } from '@/lib/llm';
 import { synthesizeSpeech, playAudioBuffer } from '@/lib/tts';
+import { parseExpression, EXPRESSION_SYSTEM_PROMPT_ADDITION } from '@/lib/expression';
 
 interface VisionHookOptions {
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -23,17 +24,16 @@ export function useVision({ videoRef, iframeRef }: VisionHookOptions) {
     setIsSpeaking,
     setIsThinking,
     setCurrentCaption,
+    setCurrentExpression,
     addChat,
   } = useStore();
 
-  // Use refs for fast-changing state to avoid stale closures in the interval
   const busyRef = useRef(false);
   const isSpeakingRef = useRef(false);
   const isThinkingRef = useRef(false);
   const chatHistoryRef = useRef(useStore.getState().chatHistory);
   const settingsRef = useRef(settings);
 
-  // Keep refs up to date
   useEffect(() => { settingsRef.current = settings; }, [settings]);
 
   useEffect(() => {
@@ -55,7 +55,6 @@ export function useVision({ videoRef, iframeRef }: VisionHookOptions) {
     busyRef.current = true;
 
     try {
-      // 1. Capture frame from video or iframe
       const imageB64 = await captureFrame(
         videoRef.current ?? null,
         iframeRef.current ?? null,
@@ -66,7 +65,6 @@ export function useVision({ videoRef, iframeRef }: VisionHookOptions) {
         return;
       }
 
-      // 2. Vision LLM → short description
       const description = await callVisionLLM(s.vision, imageB64);
       if (!description.trim()) {
         busyRef.current = false;
@@ -75,10 +73,10 @@ export function useVision({ videoRef, iframeRef }: VisionHookOptions) {
 
       setLastVisionDescription(description);
 
-      // 3. Pass description to main LLM (if enabled)
       if (s.vision.passToMainLLM) {
         const visionContext = `[Game screen description: ${description}]`;
         const syntheticUserMsg = { role: 'user' as const, content: visionContext };
+        const augmentedSystemPrompt = s.systemPrompt + EXPRESSION_SYSTEM_PROMPT_ADDITION;
 
         setIsThinking(true);
         setCurrentCaption('');
@@ -86,20 +84,21 @@ export function useVision({ videoRef, iframeRef }: VisionHookOptions) {
         const raw = await callLLM(
           s.llm,
           [...chatHistoryRef.current, syntheticUserMsg],
-          s.systemPrompt,
+          augmentedSystemPrompt,
         );
-        const response = stripThinkTags(raw);
+        const stripped = stripThinkTags(raw);
+        const { expression, cleanText } = parseExpression(stripped);
 
         addChat({ role: 'user', content: visionContext });
-        addChat({ role: 'assistant', content: response });
+        addChat({ role: 'assistant', content: cleanText });
         setIsThinking(false);
-        setCurrentCaption(response);
+        setCurrentExpression(expression);
+        setCurrentCaption(cleanText);
 
-        // 4. TTS
         if (s.tts.apiKey || s.tts.provider === 'voicevox' || s.tts.provider === 'aivis' || s.tts.email) {
           setIsSpeaking(true);
           try {
-            const audio = await synthesizeSpeech(s.tts, response);
+            const audio = await synthesizeSpeech(s.tts, cleanText);
             if (audio) await playAudioBuffer(audio);
           } catch (e) {
             console.error('Vision TTS error:', e);
@@ -107,7 +106,10 @@ export function useVision({ videoRef, iframeRef }: VisionHookOptions) {
           setIsSpeaking(false);
         }
 
-        setTimeout(() => setCurrentCaption(''), 8000);
+        setTimeout(() => {
+          setCurrentCaption('');
+          setCurrentExpression('neutral');
+        }, 8000);
       }
     } catch (e) {
       console.error('Vision cycle error:', e);
@@ -116,7 +118,7 @@ export function useVision({ videoRef, iframeRef }: VisionHookOptions) {
     }
 
     busyRef.current = false;
-  }, [addChat, setIsSpeaking, setIsThinking, setCurrentCaption, setLastVisionDescription, videoRef, iframeRef]);
+  }, [addChat, setIsSpeaking, setIsThinking, setCurrentCaption, setCurrentExpression, setLastVisionDescription, videoRef, iframeRef]);
 
   useEffect(() => {
     const { vision, gaming } = settings;
@@ -127,7 +129,6 @@ export function useVision({ videoRef, iframeRef }: VisionHookOptions) {
 
     const intervalMs = Math.max(5, vision.intervalSeconds) * 1000;
 
-    // Run immediately on mount so we don't wait the full interval first
     const firstRun = setTimeout(() => { runVisionCycle(); }, 2000);
     const interval = setInterval(runVisionCycle, intervalMs);
 
