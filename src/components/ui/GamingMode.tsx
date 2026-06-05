@@ -157,7 +157,7 @@ export default function GamingModeView() {
         }}
         title="Scroll to resize"
       >
-        <VTuberCanvas className="w-full h-full" />
+        <VTuberCanvas className="w-full h-full" transparent />
       </div>
 
       {/* ── Caption centered at bottom of FULL screen ───────────────── */}
