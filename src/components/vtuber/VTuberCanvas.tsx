@@ -22,7 +22,6 @@ export default function VTuberCanvas({ className }: { className?: string }) {
 
     const scene = new THREE.Scene();
 
-    // If a custom BG image is set, make the canvas transparent so the CSS bg shows through
     const hasCustomBg = !!settings.customBgDataUrl;
     if (hasCustomBg) {
       scene.background = null;
@@ -36,14 +35,14 @@ export default function VTuberCanvas({ className }: { className?: string }) {
 
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
-      alpha: hasCustomBg, // enable alpha channel when using custom bg image
+      alpha: hasCustomBg,
     });
     renderer.setSize(el.clientWidth, el.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = true;
     if (hasCustomBg) {
-      renderer.setClearColor(0x000000, 0); // fully transparent clear
+      renderer.setClearColor(0x000000, 0);
     }
     el.appendChild(renderer.domElement);
 
@@ -63,6 +62,7 @@ export default function VTuberCanvas({ className }: { className?: string }) {
       blinkTimer: 0, blinkPhase: 0 as number,
       floatTimer: 0, mouthTimer: 0, breathTimer: 0,
       headSwayTimer: 0, tailTimer: 0,
+      armSettleTimer: 0, armsSettled: false,
     };
 
     const vrmUrl = settings.customVrmUrl || '/vrm/miko.vrm';
@@ -79,6 +79,27 @@ export default function VTuberCanvas({ className }: { className?: string }) {
         vrm.scene.rotation.y = 0;
         scene.add(vrm.scene);
         vrmRef.current = vrm;
+
+        // Immediately pose arms down so there's no T-pose flash
+        const hb = vrm.humanoid;
+        const leftUpperArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftUpperArm);
+        const rightUpperArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightUpperArm);
+        const leftLowerArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftLowerArm);
+        const rightLowerArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightLowerArm);
+
+        // Arms down: rotate upper arms forward/down
+        if (leftUpperArm) {
+          leftUpperArm.rotation.z = -1.2;  // bring left arm down
+          leftUpperArm.rotation.x = 0.1;
+        }
+        if (rightUpperArm) {
+          rightUpperArm.rotation.z = 1.2;  // bring right arm down
+          rightUpperArm.rotation.x = 0.1;
+        }
+        // Slight elbow bend for natural look
+        if (leftLowerArm) leftLowerArm.rotation.z = 0.1;
+        if (rightLowerArm) rightLowerArm.rotation.z = -0.1;
+
         setLoadStatus('ready');
       },
       (progress) => {
@@ -101,6 +122,7 @@ export default function VTuberCanvas({ className }: { className?: string }) {
       anim.mouthTimer += delta;
       anim.blinkTimer += delta;
       anim.tailTimer += delta;
+      anim.armSettleTimer += delta;
 
       const eb = vrm.expressionManager;
       const hb = vrm.humanoid;
@@ -124,15 +146,30 @@ export default function VTuberCanvas({ className }: { className?: string }) {
       const spineBone = hb?.getNormalizedBoneNode(VRMHumanBoneName.Spine);
       if (spineBone) spineBone.rotation.x = Math.sin(anim.breathTimer * 0.9) * 0.012;
 
+      // Arms: natural idle hang at sides with gentle sway
+      // Target: arms slightly forward and down (not T-pose)
       const leftUpperArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftUpperArm);
       const rightUpperArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightUpperArm);
+      const leftLowerArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftLowerArm);
+      const rightLowerArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightLowerArm);
+
       if (leftUpperArm) {
-        leftUpperArm.rotation.z = -0.3 + Math.sin(anim.floatTimer * 0.8) * 0.04;
-        leftUpperArm.rotation.x = Math.sin(anim.floatTimer * 0.6) * 0.02;
+        const targetZ = -1.2 + Math.sin(anim.floatTimer * 0.8) * 0.04;
+        const targetX = 0.1 + Math.sin(anim.floatTimer * 0.6) * 0.02;
+        leftUpperArm.rotation.z += (targetZ - leftUpperArm.rotation.z) * 0.08;
+        leftUpperArm.rotation.x += (targetX - leftUpperArm.rotation.x) * 0.08;
       }
       if (rightUpperArm) {
-        rightUpperArm.rotation.z = 0.3 + Math.sin(anim.floatTimer * 0.8 + 0.5) * 0.04;
-        rightUpperArm.rotation.x = Math.sin(anim.floatTimer * 0.6 + 0.5) * 0.02;
+        const targetZ = 1.2 + Math.sin(anim.floatTimer * 0.8 + 0.5) * 0.04;
+        const targetX = 0.1 + Math.sin(anim.floatTimer * 0.6 + 0.5) * 0.02;
+        rightUpperArm.rotation.z += (targetZ - rightUpperArm.rotation.z) * 0.08;
+        rightUpperArm.rotation.x += (targetX - rightUpperArm.rotation.x) * 0.08;
+      }
+      if (leftLowerArm) {
+        leftLowerArm.rotation.z += (0.1 - leftLowerArm.rotation.z) * 0.05;
+      }
+      if (rightLowerArm) {
+        rightLowerArm.rotation.z += (-0.1 - rightLowerArm.rotation.z) * 0.05;
       }
 
       if (eb) {
