@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { VTuberExpression } from '@/lib/expression';
 
 export type FontOption = 'comic' | 'arial' | 'montserrat' | 'verdana';
 export type Language = 'en' | 'es';
@@ -62,13 +63,12 @@ export interface VisionConfig {
 
 export interface CollabConfig {
   enabled: boolean;
-  // Discord integration
   discordWebhookUrl: string;
   discordBotToken: string;
   discordChannelId: string;
-  discordReadMessages: boolean;   // bot reads Discord messages and feeds to AI
-  discordSendResponses: boolean;  // AI responses sent to Discord
-  discordPrefix: string;          // optional command prefix e.g. "!"
+  discordReadMessages: boolean;
+  discordSendResponses: boolean;
+  discordPrefix: string;
 }
 
 export interface STTConfig {
@@ -76,10 +76,10 @@ export interface STTConfig {
   provider: 'browser' | 'whisper' | 'deepgram' | 'assemblyai';
   apiKey: string;
   language: string;
-  continuous: boolean;           // keep listening vs push-to-talk
-  pushToTalkKey: string;         // key for push-to-talk mode
-  silenceTimeoutMs: number;      // ms of silence before sending
-  sendToLLM: boolean;            // auto-send recognized text to LLM
+  continuous: boolean;
+  pushToTalkKey: string;
+  silenceTimeoutMs: number;
+  sendToLLM: boolean;
 }
 
 export interface Settings {
@@ -108,6 +108,7 @@ interface AppState {
   isSpeaking: boolean;
   isThinking: boolean;
   currentCaption: string;
+  currentExpression: VTuberExpression;
   chatHistory: { role: 'user' | 'assistant'; content: string }[];
   twitchMessages: TwitchMessage[];
   emoteWall: EmoteParticle[];
@@ -120,6 +121,7 @@ interface AppState {
   setIsSpeaking: (v: boolean) => void;
   setIsThinking: (v: boolean) => void;
   setCurrentCaption: (v: string) => void;
+  setCurrentExpression: (v: VTuberExpression) => void;
   addChat: (msg: { role: 'user' | 'assistant'; content: string }) => void;
   clearChat: () => void;
   addTwitchMessage: (msg: TwitchMessage) => void;
@@ -229,10 +231,11 @@ export const useStore = create<AppState>()(
       isSpeaking: false,
       isThinking: false,
       currentCaption: '',
+      currentExpression: 'neutral' as VTuberExpression,
       chatHistory: [],
       twitchMessages: [],
       emoteWall: [],
-      chatPanelVisible: false, // hidden by default
+      chatPanelVisible: false,
       lastVisionDescription: '',
       sttListening: false,
       sttTranscript: '',
@@ -241,6 +244,7 @@ export const useStore = create<AppState>()(
       setIsSpeaking: (v) => set({ isSpeaking: v }),
       setIsThinking: (v) => set({ isThinking: v }),
       setCurrentCaption: (v) => set({ currentCaption: v }),
+      setCurrentExpression: (v) => set({ currentExpression: v }),
       addChat: (msg) => set((state) => ({ chatHistory: [...state.chatHistory.slice(-50), msg] })),
       clearChat: () => set({ chatHistory: [] }),
       addTwitchMessage: (msg) => set((state) => ({
