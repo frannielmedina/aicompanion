@@ -5,7 +5,13 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils, VRMHumanBoneName } from '@pixiv/three-vrm';
 import { useStore } from '@/store';
 
-export default function VTuberCanvas({ className }: { className?: string }) {
+interface Props {
+  className?: string;
+  /** When true the Three.js renderer uses alpha=true and clears to transparent */
+  transparent?: boolean;
+}
+
+export default function VTuberCanvas({ className, transparent = false }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const { isSpeaking, isThinking, settings } = useStore();
   const vrmRef = useRef<any>(null);
@@ -22,8 +28,12 @@ export default function VTuberCanvas({ className }: { className?: string }) {
 
     const scene = new THREE.Scene();
 
+    // In transparent mode (gaming overlay) always clear to transparent.
+    // Otherwise respect the user's green-screen / custom-bg setting.
     const hasCustomBg = !!settings.customBgDataUrl;
-    if (hasCustomBg) {
+    if (transparent) {
+      scene.background = null;
+    } else if (hasCustomBg) {
       scene.background = null;
     } else {
       scene.background = new THREE.Color(settings.greenScreenColor);
@@ -35,13 +45,13 @@ export default function VTuberCanvas({ className }: { className?: string }) {
 
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
-      alpha: hasCustomBg,
+      alpha: transparent || hasCustomBg,
     });
     renderer.setSize(el.clientWidth, el.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = true;
-    if (hasCustomBg) {
+    if (transparent || hasCustomBg) {
       renderer.setClearColor(0x000000, 0);
     }
     el.appendChild(renderer.domElement);
@@ -80,23 +90,14 @@ export default function VTuberCanvas({ className }: { className?: string }) {
         scene.add(vrm.scene);
         vrmRef.current = vrm;
 
-        // Immediately pose arms down so there's no T-pose flash
         const hb = vrm.humanoid;
         const leftUpperArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftUpperArm);
         const rightUpperArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightUpperArm);
         const leftLowerArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftLowerArm);
         const rightLowerArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightLowerArm);
 
-        // Arms down: rotate upper arms forward/down
-        if (leftUpperArm) {
-          leftUpperArm.rotation.z = -1.2;  // bring left arm down
-          leftUpperArm.rotation.x = 0.1;
-        }
-        if (rightUpperArm) {
-          rightUpperArm.rotation.z = 1.2;  // bring right arm down
-          rightUpperArm.rotation.x = 0.1;
-        }
-        // Slight elbow bend for natural look
+        if (leftUpperArm) { leftUpperArm.rotation.z = -1.2; leftUpperArm.rotation.x = 0.1; }
+        if (rightUpperArm) { rightUpperArm.rotation.z = 1.2; rightUpperArm.rotation.x = 0.1; }
         if (leftLowerArm) leftLowerArm.rotation.z = 0.1;
         if (rightLowerArm) rightLowerArm.rotation.z = -0.1;
 
@@ -146,8 +147,6 @@ export default function VTuberCanvas({ className }: { className?: string }) {
       const spineBone = hb?.getNormalizedBoneNode(VRMHumanBoneName.Spine);
       if (spineBone) spineBone.rotation.x = Math.sin(anim.breathTimer * 0.9) * 0.012;
 
-      // Arms: natural idle hang at sides with gentle sway
-      // Target: arms slightly forward and down (not T-pose)
       const leftUpperArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftUpperArm);
       const rightUpperArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightUpperArm);
       const leftLowerArm = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftLowerArm);
@@ -165,12 +164,8 @@ export default function VTuberCanvas({ className }: { className?: string }) {
         rightUpperArm.rotation.z += (targetZ - rightUpperArm.rotation.z) * 0.08;
         rightUpperArm.rotation.x += (targetX - rightUpperArm.rotation.x) * 0.08;
       }
-      if (leftLowerArm) {
-        leftLowerArm.rotation.z += (0.1 - leftLowerArm.rotation.z) * 0.05;
-      }
-      if (rightLowerArm) {
-        rightLowerArm.rotation.z += (-0.1 - rightLowerArm.rotation.z) * 0.05;
-      }
+      if (leftLowerArm) leftLowerArm.rotation.z += (0.1 - leftLowerArm.rotation.z) * 0.05;
+      if (rightLowerArm) rightLowerArm.rotation.z += (-0.1 - rightLowerArm.rotation.z) * 0.05;
 
       if (eb) {
         if (anim.blinkTimer > 3.5 + Math.random() * 2.5 && anim.blinkPhase === 0) {
@@ -227,10 +222,10 @@ export default function VTuberCanvas({ className }: { className?: string }) {
       renderer.dispose();
       if (el.contains(renderer.domElement)) el.removeChild(renderer.domElement);
     };
-  }, [settings.greenScreenColor, settings.customVrmUrl, settings.customBgDataUrl]);
+  }, [settings.greenScreenColor, settings.customVrmUrl, settings.customBgDataUrl, transparent]);
 
   return (
-    <div className={className} style={{ position: 'relative' }}>
+    <div className={className} style={{ position: 'relative', background: 'transparent' }}>
       <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
 
       {loadStatus === 'loading' && (
