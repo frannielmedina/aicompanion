@@ -1,11 +1,20 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
-import { Send, Trash2, Mic, MicOff } from 'lucide-react';
+import { Send, Trash2 } from 'lucide-react';
 import { useStore } from '@/store';
 import { callLLM } from '@/lib/llm';
 import { synthesizeSpeech, playAudioBuffer } from '@/lib/tts';
 import { translations } from '@/lib/i18n';
 import { FONT_MAP } from '@/lib/fonts';
+
+/** Strip <think>…</think> blocks (including partial/unclosed ones) from model output */
+function stripThinkTags(text: string): string {
+  // Remove complete <think>...</think> blocks
+  let result = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  // Remove unclosed <think> blocks (reasoning that bleeds to end of string)
+  result = result.replace(/<think>[\s\S]*/gi, '');
+  return result.trim();
+}
 
 export default function ChatPanel() {
   const { settings, chatHistory, addChat, clearChat, setIsSpeaking, setIsThinking, setCurrentCaption } = useStore();
@@ -29,7 +38,8 @@ export default function ChatPanel() {
     setCurrentCaption('');
 
     try {
-      const response = await callLLM(settings.llm, [...chatHistory, { role: 'user', content: msg }], settings.systemPrompt);
+      const raw = await callLLM(settings.llm, [...chatHistory, { role: 'user', content: msg }], settings.systemPrompt);
+      const response = stripThinkTags(raw);
       addChat({ role: 'assistant', content: response });
       setIsThinking(false);
       setCurrentCaption(response);
