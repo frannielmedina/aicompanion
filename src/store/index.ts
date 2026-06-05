@@ -62,6 +62,7 @@ export interface Settings {
   customVrmUrl?: string;
   customVrmName?: string;
   caption?: CaptionConfig;
+  customBgDataUrl?: string;
 }
 
 interface AppState {
@@ -73,6 +74,7 @@ interface AppState {
   chatHistory: { role: 'user' | 'assistant'; content: string }[];
   twitchMessages: TwitchMessage[];
   emoteWall: EmoteParticle[];
+  chatPanelVisible: boolean;
   setSettings: (s: Partial<Settings>) => void;
   setSettingsOpen: (v: boolean) => void;
   setIsSpeaking: (v: boolean) => void;
@@ -83,6 +85,7 @@ interface AppState {
   addTwitchMessage: (msg: TwitchMessage) => void;
   addEmote: (e: EmoteParticle) => void;
   removeEmote: (id: string) => void;
+  setChatPanelVisible: (v: boolean) => void;
 }
 
 export interface TwitchMessage {
@@ -111,6 +114,7 @@ const defaultSettings: Settings = {
   greenScreenColor: '#00ff00',
   customVrmUrl: '',
   customVrmName: '',
+  customBgDataUrl: '',
   caption: {
     color: '#ffffff',
     font: 'comic',
@@ -155,6 +159,7 @@ export const useStore = create<AppState>()(
       chatHistory: [],
       twitchMessages: [],
       emoteWall: [],
+      chatPanelVisible: true,
       setSettings: (s) => set((state) => ({ settings: { ...state.settings, ...s } })),
       setSettingsOpen: (v) => set({ settingsOpen: v }),
       setIsSpeaking: (v) => set({ isSpeaking: v }),
@@ -167,6 +172,7 @@ export const useStore = create<AppState>()(
       })),
       addEmote: (e) => set((state) => ({ emoteWall: [...state.emoteWall, e] })),
       removeEmote: (id) => set((state) => ({ emoteWall: state.emoteWall.filter((e) => e.id !== id) })),
+      setChatPanelVisible: (v) => set({ chatPanelVisible: v }),
     }),
     { name: 'ai-companion-settings', partialize: (s) => ({ settings: s.settings }) }
   )
