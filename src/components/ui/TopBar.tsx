@@ -1,16 +1,16 @@
 'use client';
-import { Settings, Gamepad2, Monitor, Twitch, Volume2, VolumeX, Wifi, WifiOff } from 'lucide-react';
+import { Settings, Gamepad2, Twitch } from 'lucide-react';
 import { useStore } from '@/store';
 import { translations } from '@/lib/i18n';
 import { FONT_MAP } from '@/lib/fonts';
 
 export default function TopBar() {
-  const { settings, settingsOpen, setSettingsOpen, isSpeaking, isThinking } = useStore();
+  const { settings, settingsOpen, setSettingsOpen, isSpeaking } = useStore();
   const t = translations[settings.language];
   const fontFamily = FONT_MAP[settings.font];
 
-  const statusColor = isThinking ? 'text-yellow-400' : isSpeaking ? 'text-accent-secondary' : 'text-accent-green';
-  const statusText = isThinking ? t.thinking : isSpeaking ? t.speaking : t.idle;
+  const statusColor = isSpeaking ? 'text-accent-secondary' : 'text-accent-green';
+  const statusText = isSpeaking ? t.speaking : t.idle;
 
   return (
     <header className="h-12 bg-dark-800/95 backdrop-blur border-b border-dark-500 flex items-center justify-between px-4 z-40" style={{ fontFamily }}>
@@ -25,7 +25,10 @@ export default function TopBar() {
       {/* Center: Status */}
       <div className="flex items-center gap-2">
         <div className={`flex items-center gap-1.5 ${statusColor}`}>
-          <div className={`w-2 h-2 rounded-full ${isThinking || isSpeaking ? 'animate-pulse' : ''}`} style={{ background: 'currentColor' }} />
+          <div
+            className={`w-2 h-2 rounded-full ${isSpeaking ? 'animate-pulse' : ''}`}
+            style={{ background: 'currentColor' }}
+          />
           <span className="text-xs font-medium">{statusText}</span>
         </div>
         {settings.twitch.enabled && (
