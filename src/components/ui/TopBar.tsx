@@ -1,11 +1,15 @@
 'use client';
-import { Settings, Gamepad2, Twitch } from 'lucide-react';
+import { Settings, Gamepad2, Twitch, MessageSquare, MessageSquareOff } from 'lucide-react';
 import { useStore } from '@/store';
 import { translations } from '@/lib/i18n';
 import { FONT_MAP } from '@/lib/fonts';
 
-export default function TopBar() {
-  const { settings, settingsOpen, setSettingsOpen, isSpeaking } = useStore();
+interface TopBarProps {
+  uiVisible?: boolean;
+}
+
+export default function TopBar({ uiVisible }: TopBarProps) {
+  const { settings, settingsOpen, setSettingsOpen, isSpeaking, chatPanelVisible, setChatPanelVisible } = useStore();
   const t = translations[settings.language];
   const fontFamily = FONT_MAP[settings.font];
 
@@ -13,10 +17,12 @@ export default function TopBar() {
   const statusText = isSpeaking ? t.speaking : t.idle;
 
   return (
-    <header className="h-12 bg-dark-800/95 backdrop-blur border-b border-dark-500 flex items-center justify-between px-4 z-40" style={{ fontFamily }}>
-      {/* Left: Logo */}
+    <header
+      className="h-12 bg-dark-800/95 backdrop-blur border-b border-dark-500 flex items-center justify-between px-4 z-40"
+      style={{ fontFamily }}
+    >
+      {/* Left: Name only — no robot icon */}
       <div className="flex items-center gap-2">
-        <span className="text-xl">🤖</span>
         <span className="font-bold text-white text-sm tracking-wide">{t.appName}</span>
         <span className="text-gray-600 text-xs">|</span>
         <span className="text-accent-secondary text-xs font-medium">{settings.vtuberName}</span>
@@ -45,12 +51,21 @@ export default function TopBar() {
         )}
       </div>
 
-      {/* Right: Actions */}
+      {/* Right: Chat toggle + Settings */}
       <div className="flex items-center gap-1">
-        <div className="text-xs text-gray-500 mr-2 hidden sm:block">
-          LLM: <span className="text-gray-400">{settings.llm.provider}</span>
-          {' · '}TTS: <span className="text-gray-400">{settings.tts.provider}</span>
-        </div>
+        {/* Chat panel toggle */}
+        <button
+          onClick={() => setChatPanelVisible(!chatPanelVisible)}
+          title={chatPanelVisible ? 'Hide chat' : 'Show chat'}
+          className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-dark-600 transition-all flex items-center gap-1"
+        >
+          {chatPanelVisible
+            ? <MessageSquareOff size={16} />
+            : <MessageSquare size={16} />
+          }
+        </button>
+
+        {/* Settings */}
         <button
           onClick={() => setSettingsOpen(!settingsOpen)}
           className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-dark-600 transition-all"
