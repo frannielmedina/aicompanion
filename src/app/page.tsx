@@ -21,7 +21,13 @@ export default function Home() {
   const fontFamily = FONT_MAP[settings.font];
 
   const [uiVisible, setUiVisible] = useState(true);
+  const [mounted, setMounted] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Prevent SSR/hydration mismatch — don't render dynamic content until client is ready
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const showUI = useCallback(() => {
     setUiVisible(true);
@@ -37,6 +43,16 @@ export default function Home() {
   const stageBg = settings.customBgDataUrl
     ? `url("${settings.customBgDataUrl}") center/cover no-repeat`
     : settings.greenScreenColor;
+
+  // Render a simple loading shell until client is mounted
+  // This prevents hydration mismatches from Zustand persist / localStorage
+  if (!mounted) {
+    return (
+      <div className="flex flex-col h-screen bg-dark-900 text-white overflow-hidden items-center justify-center">
+        <div className="text-4xl animate-bounce">🌸</div>
+      </div>
+    );
+  }
 
   return (
     <div
