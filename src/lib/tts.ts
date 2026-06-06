@@ -157,14 +157,41 @@ async function callCustomTTS(endpoint: string, apiKey: string, voice: string, te
 
 export function playAudioBuffer(buffer: ArrayBuffer): Promise<void> {
   return new Promise((resolve, reject) => {
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    ctx.decodeAudioData(buffer, (decoded) => {
-      const source = ctx.createBufferSource();
-      source.buffer = decoded;
-      source.connect(ctx.destination);
-      source.start(0);
-      source.onended = () => { ctx.close(); resolve(); };
-    }, reject);
+    // Guard against SSR and browsers where AudioContext is unavailable
+    if (typeof window === 'undefined') { resolve(); return; }
+
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) {
+      console.warn('AudioContext not available in this browser');
+      resolve();
+      return;
+    }
+
+    let ctx: AudioContext;
+    try {
+      ctx = new AudioCtx();
+    } catch (e) {
+      console.warn('Failed to create AudioContext:', e);
+      resolve();
+      return;
+    }
+
+    // Firefox requires a user-gesture to resume AudioContext
+    const resume = ctx.state === 'suspended' ? ctx.resume() : Promise.resolve();
+
+    resume.then(() => {
+      ctx.decodeAudioData(
+        buffer,
+        (decoded) => {
+          const source = ctx.createBufferSource();
+          source.buffer = decoded;
+          source.connect(ctx.destination);
+          source.start(0);
+          source.onended = () => { ctx.close(); resolve(); };
+        },
+        (err) => { ctx.close(); reject(err); },
+      );
+    }).catch((err) => { ctx.close(); reject(err); });
   });
 }
 
