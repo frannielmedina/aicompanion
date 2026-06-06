@@ -8,12 +8,12 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" suppressHydrationWarning>
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet" />
       </head>
-      <body className="bg-dark-900 text-white antialiased">
+      <body className="bg-dark-900 text-white antialiased" suppressHydrationWarning>
         {children}
       </body>
     </html>
