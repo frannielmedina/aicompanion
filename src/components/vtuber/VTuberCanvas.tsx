@@ -20,8 +20,20 @@ function getVRMVersion(gltf: any): 0 | 1 {
   return 1;
 }
 
-// Map our expression names to VRM expression preset names
-// Each entry lists the presets to blend and their weights
+/** Check if WebGL2 (or WebGL1 fallback) is available before trying to init Three.js */
+function isWebGLAvailable(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const canvas = document.createElement('canvas');
+    return !!(
+      window.WebGL2RenderingContext && canvas.getContext('webgl2')
+      || window.WebGLRenderingContext && canvas.getContext('webgl')
+    );
+  } catch {
+    return false;
+  }
+}
+
 const EXPRESSION_PRESETS: Record<VTuberExpression, Array<{ name: string; weight: number }>> = {
   happy:   [{ name: 'happy', weight: 1.0 }, { name: 'relaxed', weight: 0.2 }],
   angry:   [{ name: 'angry', weight: 1.0 }],
@@ -30,8 +42,23 @@ const EXPRESSION_PRESETS: Record<VTuberExpression, Array<{ name: string; weight:
   neutral: [],
 };
 
-// All expression preset names we might touch (for cleanup)
 const ALL_EXPRESSION_PRESETS = ['happy', 'angry', 'sad', 'relaxed', 'surprised', 'thinking'];
+
+/** Fallback shown when WebGL is unavailable (VPS, restricted GPU, etc.) */
+function NoWebGLFallback({ vtuberName }: { vtuberName: string }) {
+  return (
+    <div className="w-full h-full flex flex-col items-center justify-center bg-dark-900/80 gap-4">
+      <div className="text-7xl animate-bounce select-none">🌸</div>
+      <p className="text-white font-bold text-lg" style={{ fontFamily: '"Comic Sans MS", cursive' }}>
+        {vtuberName}
+      </p>
+      <p className="text-gray-500 text-xs text-center max-w-xs px-4">
+        3D model unavailable — WebGL is disabled in this environment.<br />
+        Chat and TTS still work normally!
+      </p>
+    </div>
+  );
+}
 
 export default function VTuberCanvas({ className, transparent = false }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -40,7 +67,7 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
   const vrmVersionRef = useRef<0 | 1>(1);
   const clockRef = useRef(new THREE.Clock());
   const stateRef = useRef({ isSpeaking: false, isThinking: false, currentExpression: 'neutral' as VTuberExpression });
-  const [loadStatus, setLoadStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [loadStatus, setLoadStatus] = useState<'loading' | 'ready' | 'error' | 'no-webgl'>('loading');
   const [loadProgress, setLoadProgress] = useState(0);
 
   useEffect(() => {
@@ -49,6 +76,13 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
 
   useEffect(() => {
     if (!mountRef.current) return;
+
+    // ── WebGL availability check ─────────────────────────────────────────
+    if (!isWebGLAvailable()) {
+      setLoadStatus('no-webgl');
+      return;
+    }
+
     const el = mountRef.current;
 
     const scene = new THREE.Scene();
@@ -65,7 +99,24 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
     camera.position.set(0, 1.4, 2.8);
     camera.lookAt(0, 1.2, 0);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: transparent || hasCustomBg });
+    // ── Renderer — wrapped in try/catch so a WebGL failure is caught ─────
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: transparent || hasCustomBg });
+    } catch (e) {
+      console.error('WebGL renderer creation failed:', e);
+      setLoadStatus('no-webgl');
+      return;
+    }
+
+    // Double-check the renderer actually got a context
+    if (!renderer.getContext()) {
+      console.error('WebGL context is null after renderer creation');
+      renderer.dispose();
+      setLoadStatus('no-webgl');
+      return;
+    }
+
     renderer.setSize(el.clientWidth, el.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -93,7 +144,7 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
       headSwayTimer: 0,
       expressionTimer: 0,
       prevExpression: 'neutral' as VTuberExpression,
-      expressionBlend: 0, // 0→1 transition progress
+      expressionBlend: 0,
     };
 
     const vrmUrl = settings.customVrmUrl || '/vrm/miko.vrm';
@@ -117,7 +168,6 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
         vrmRef.current = vrm;
 
         const hb = vrm.humanoid;
-
         const setBone = (name: VRMHumanBoneName, rx: number, ry: number, rz: number) => {
           const bone = hb?.getNormalizedBoneNode(name);
           if (!bone) return;
@@ -142,15 +192,11 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
       (error) => { console.error('VRM load error:', error); setLoadStatus('error'); }
     );
 
-    let animId: number;
-
-    /**
-     * Safely set a VRM expression value, trying multiple common preset name variants.
-     */
     const trySetExpression = (eb: any, name: string, value: number) => {
       try { eb.setValue(name, value); } catch {}
     };
 
+    let animId: number;
     const animate = () => {
       animId = requestAnimationFrame(animate);
       const delta = clockRef.current.getDelta();
@@ -170,29 +216,17 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
       const eb = vrm.expressionManager;
       const hb = vrm.humanoid;
 
-      // Float
       vrm.scene.position.y = Math.sin(anim.floatTimer * 1.1) * 0.025;
 
-      // Head sway — angry tilts more, sad droops, happy bounces
       const headBone = hb?.getNormalizedBoneNode(VRMHumanBoneName.Head);
       if (headBone) {
         let targetZ = Math.sin(anim.headSwayTimer * 0.45) * 0.04;
         let targetX = Math.sin(anim.headSwayTimer * 0.6) * 0.02;
-
-        if (isThinking) {
-          targetZ = 0.18;
-        } else if (currentExpression === 'angry') {
-          targetZ = Math.sin(anim.headSwayTimer * 1.2) * 0.06; // agitated shaking
-          targetX = 0.04; // slight forward lean
-        } else if (currentExpression === 'sad') {
-          targetZ = 0.1;
-          targetX = 0.08; // drooping forward
-        } else if (currentExpression === 'happy') {
-          targetZ = Math.sin(anim.headSwayTimer * 0.9) * 0.06; // more energetic sway
-        } else if (currentExpression === 'relaxed') {
-          targetZ = Math.sin(anim.headSwayTimer * 0.3) * 0.025; // slow, calm sway
-        }
-
+        if (isThinking) { targetZ = 0.18; }
+        else if (currentExpression === 'angry') { targetZ = Math.sin(anim.headSwayTimer * 1.2) * 0.06; targetX = 0.04; }
+        else if (currentExpression === 'sad') { targetZ = 0.1; targetX = 0.08; }
+        else if (currentExpression === 'happy') { targetZ = Math.sin(anim.headSwayTimer * 0.9) * 0.06; }
+        else if (currentExpression === 'relaxed') { targetZ = Math.sin(anim.headSwayTimer * 0.3) * 0.025; }
         headBone.rotation.z += (targetZ - headBone.rotation.z) * 0.06;
         headBone.rotation.x += (targetX - headBone.rotation.x) * 0.06;
         headBone.rotation.y += (Math.sin(anim.headSwayTimer * 0.3) * 0.03 - headBone.rotation.y) * 0.06;
@@ -204,9 +238,7 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
       const spineBone = hb?.getNormalizedBoneNode(VRMHumanBoneName.Spine);
       if (spineBone) spineBone.rotation.x = Math.sin(anim.breathTimer * 0.9) * 0.012;
 
-      // Arms
       const zSign = version === 0 ? -1 : 1;
-
       const leftUpper  = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftUpperArm);
       const rightUpper = hb?.getNormalizedBoneNode(VRMHumanBoneName.RightUpperArm);
       const leftLower  = hb?.getNormalizedBoneNode(VRMHumanBoneName.LeftLowerArm);
@@ -225,9 +257,7 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
       if (leftLower)  leftLower.rotation.z  += (zSign *  0.1 - leftLower.rotation.z)  * 0.05;
       if (rightLower) rightLower.rotation.z += (zSign * -0.1 - rightLower.rotation.z) * 0.05;
 
-      // ── Expressions ─────────────────────────────────────────────────────
       if (eb) {
-        // --- Blink (suppress during strong expressions or angry) ---
         const suppressBlink = currentExpression === 'angry';
         if (!suppressBlink) {
           if (anim.blinkTimer > 3.5 + Math.random() * 2.5 && anim.blinkPhase === 0) {
@@ -243,53 +273,32 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
             if (v <= 0) { anim.blinkPhase = 0; anim.blinkTimer = 0; }
           }
         } else {
-          // Wide open eyes when angry — reset blink
           trySetExpression(eb, 'blink', 0);
-          anim.blinkPhase = 0;
-          anim.blinkTimer = 0;
+          anim.blinkPhase = 0; anim.blinkTimer = 0;
         }
 
-        // --- Smooth expression transition ---
         if (currentExpression !== anim.prevExpression) {
           anim.expressionTimer = 0;
           anim.prevExpression = currentExpression;
           anim.expressionBlend = 0;
         }
-        // Blend speed: transition in ~0.4 seconds
         anim.expressionBlend = Math.min(1, anim.expressionBlend + delta * 2.5);
         const blend = anim.expressionBlend;
 
-        // Clear all expression presets first
         ALL_EXPRESSION_PRESETS.forEach((name) => trySetExpression(eb, name, 0));
-
-        // Apply target expression presets with blend factor
-        const targets = EXPRESSION_PRESETS[currentExpression];
-        targets.forEach(({ name, weight }) => {
+        EXPRESSION_PRESETS[currentExpression].forEach(({ name, weight }) => {
           trySetExpression(eb, name, weight * blend);
         });
 
-        // --- Thinking override (layered on top) ---
-        if (isThinking) {
-          trySetExpression(eb, 'thinking', Math.min(1, anim.headSwayTimer * 2));
-        }
+        if (isThinking) trySetExpression(eb, 'thinking', Math.min(1, anim.headSwayTimer * 2));
 
-        // --- Mouth / lip sync ---
         if (isSpeaking) {
           const t = anim.mouthTimer;
           const openAmount = (Math.sin((t * 4.5) % (Math.PI * 2)) * 0.5 + 0.5) * 0.85;
-
-          // Vary visemes by expression
-          let visemes: string[];
-          if (currentExpression === 'angry') {
-            visemes = ['aa', 'oh', 'aa', 'ou', 'aa']; // more open, punchy
-          } else if (currentExpression === 'sad') {
-            visemes = ['ih', 'nn', 'ih', 'ee', 'ih']; // quieter, subdued
-          } else if (currentExpression === 'happy') {
-            visemes = ['aa', 'ih', 'ee', 'aa', 'oh']; // bright, varied
-          } else {
-            visemes = ['aa', 'ih', 'ou', 'ee', 'oh'];
-          }
-
+          const visemes = currentExpression === 'angry'   ? ['aa', 'oh', 'aa', 'ou', 'aa']
+                        : currentExpression === 'sad'     ? ['ih', 'nn', 'ih', 'ee', 'ih']
+                        : currentExpression === 'happy'   ? ['aa', 'ih', 'ee', 'aa', 'oh']
+                        : ['aa', 'ih', 'ou', 'ee', 'oh'];
           ['aa', 'ih', 'ou', 'ee', 'oh', 'nn'].forEach((v) => trySetExpression(eb, v, 0));
           trySetExpression(eb, visemes[Math.floor(t * 3.5) % 5], openAmount);
         } else {
@@ -319,6 +328,15 @@ export default function VTuberCanvas({ className, transparent = false }: Props) 
       if (el.contains(renderer.domElement)) el.removeChild(renderer.domElement);
     };
   }, [settings.greenScreenColor, settings.customVrmUrl, settings.customBgDataUrl, transparent]);
+
+  // WebGL not available — show emoji fallback instead of crashing
+  if (loadStatus === 'no-webgl') {
+    return (
+      <div className={className} style={{ position: 'relative', background: 'transparent' }}>
+        <NoWebGLFallback vtuberName={settings.vtuberName} />
+      </div>
+    );
+  }
 
   return (
     <div className={className} style={{ position: 'relative', background: 'transparent' }}>
