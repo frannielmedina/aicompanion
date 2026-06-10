@@ -62,18 +62,35 @@ export default function ChatPanel() {
       // Store history WITHOUT the expression tag (clean for display)
       addChat({ role: 'assistant', content: cleanText });
       setIsThinking(false);
-      setCurrentExpression(expression);
-      setCurrentCaption(cleanText);
 
-      if (settings.tts.apiKey || settings.tts.provider === 'voicevox' || settings.tts.provider === 'aivis' || settings.tts.email) {
-        setIsSpeaking(true);
+      const hasTTS = settings.tts.apiKey || settings.tts.provider === 'voicevox' || settings.tts.provider === 'aivis' || settings.tts.email;
+
+      if (hasTTS) {
+        // Generate audio FIRST — caption/expression only appear once audio is ready
         try {
           const audio = await synthesizeSpeech(settings.tts, cleanText);
-          if (audio) await playAudioBuffer(audio);
+          if (audio) {
+            // Audio is ready — now show caption and expression, then play
+            setCurrentExpression(expression);
+            setCurrentCaption(cleanText);
+            setIsSpeaking(true);
+            await playAudioBuffer(audio);
+            setIsSpeaking(false);
+          } else {
+            // No audio returned — show caption anyway so text isn't lost
+            setCurrentExpression(expression);
+            setCurrentCaption(cleanText);
+          }
         } catch (e) {
           console.error('TTS Error:', e);
+          // On TTS failure — still show the caption so the response isn't invisible
+          setCurrentExpression(expression);
+          setCurrentCaption(cleanText);
         }
-        setIsSpeaking(false);
+      } else {
+        // No TTS configured — show caption immediately
+        setCurrentExpression(expression);
+        setCurrentCaption(cleanText);
       }
 
       // Reset expression to neutral after caption fades
