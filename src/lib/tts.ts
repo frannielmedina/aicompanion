@@ -145,13 +145,64 @@ async function callNovelAITTS(email: string, password: string, voice: string, te
   return res.arrayBuffer();
 }
 
-async function callCustomTTS(endpoint: string, apiKey: string, voice: string, text: string): Promise<ArrayBuffer> {
-  const res = await fetch(`${endpoint}/tts`, {
+/**
+ * Custom TTS — supports the Chatterbox ngrok/Colab server format.
+ *
+ * The Chatterbox bridge server exposes:
+ *   POST <base_url>/tts   { text, language?, exaggeration?, cfg_weight?, auto_emotion? }
+ *   → raw WAV bytes (Content-Type: audio/wav)
+ *
+ * The user pastes the base ngrok URL (e.g. https://xxxx.ngrok-free.app) into the
+ * "Custom Endpoint URL" field — we append /tts ourselves.
+ *
+ * The "Voice / Reference ID" field is ignored by Chatterbox (reference audio is
+ * configured server-side), but we accept it as an optional language override
+ * (e.g. "en", "es") so the user can control language from the UI.
+ */
+async function callCustomTTS(
+  endpoint: string,
+  apiKey: string,
+  voice: string,
+  text: string,
+): Promise<ArrayBuffer> {
+  // Strip trailing slash so we can reliably append /tts
+  const base = endpoint.replace(/\/+$/, '');
+
+  // Decide the target URL:
+  // If the user already typed a full path ending in /tts (or /tts/), use as-is.
+  // Otherwise append /tts — this handles the common case of pasting the bare ngrok URL.
+  const url = /\/tts\/?$/.test(base) ? base : `${base}/tts`;
+
+  // Build request body — Chatterbox format
+  // "voice" field is re-used as language code if it looks like a BCP-47 tag (2-3 chars)
+  const isLangCode = voice && /^[a-z]{2,3}(-[A-Z]{2})?$/.test(voice.trim());
+  const body: Record<string, unknown> = {
+    text,
+    auto_emotion: true,
+  };
+  if (isLangCode) body.language = voice.trim();
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    // ngrok free tier requires this header to bypass the browser-warning page
+    'ngrok-skip-browser-warning': 'true',
+  };
+  // Only add Authorization if an API key was actually provided
+  if (apiKey && apiKey.trim() && apiKey.trim().toLowerCase() !== 'none') {
+    headers['Authorization'] = `Bearer ${apiKey.trim()}`;
+  }
+
+  const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({ text, voice, format: 'mp3' }),
+    headers,
+    body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Custom TTS Error ${res.status}`);
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Custom TTS Error ${res.status}${errText ? ': ' + errText.slice(0, 200) : ''}`);
+  }
+
   return res.arrayBuffer();
 }
 
