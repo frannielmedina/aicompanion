@@ -66,18 +66,31 @@ export function useTwitchChat() {
       addChat({ role: 'user', content: userContent });
       addChat({ role: 'assistant', content: cleanText });
       setIsThinking(false);
-      setCurrentExpression(expression);
-      setCurrentCaption(cleanText);
 
-      if (s.tts.apiKey || s.tts.provider === 'voicevox' || s.tts.provider === 'aivis' || s.tts.email) {
-        setIsSpeaking(true);
+      const hasTTS = s.tts.apiKey || s.tts.provider === 'voicevox' || s.tts.provider === 'aivis' || s.tts.email;
+
+      if (hasTTS) {
         try {
           const audio = await synthesizeSpeech(s.tts, cleanText);
-          if (audio) await playAudioBuffer(audio);
+          if (audio) {
+            // Audio ready — show caption/expression then play
+            setCurrentExpression(expression);
+            setCurrentCaption(cleanText);
+            setIsSpeaking(true);
+            await playAudioBuffer(audio);
+            setIsSpeaking(false);
+          } else {
+            setCurrentExpression(expression);
+            setCurrentCaption(cleanText);
+          }
         } catch (e) {
           console.error('Twitch TTS error:', e);
+          setCurrentExpression(expression);
+          setCurrentCaption(cleanText);
         }
-        setIsSpeaking(false);
+      } else {
+        setCurrentExpression(expression);
+        setCurrentCaption(cleanText);
       }
 
       setTimeout(() => {
