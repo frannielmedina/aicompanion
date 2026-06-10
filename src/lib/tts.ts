@@ -21,7 +21,7 @@ export async function synthesizeSpeech(config: TTSConfig, text: string): Promise
     case 'novelai':
       return callNovelAITTS(email || '', password || '', voice, text);
     case 'custom':
-      return callCustomTTS(customEndpoint || '', apiKey, voice, text);
+      return callCustomTTS(customEndpoint || '', apiKey, voice, text, speed || 1.0);
     default:
       throw new Error(`Unknown TTS provider: ${provider}`);
   }
@@ -36,7 +36,7 @@ async function callElevenLabs(apiKey: string, voiceId: string, model: string, te
       voice_settings: { stability: 0.5, similarity_boost: 0.75, speed },
     }),
   });
-  if (!res.ok) throw new Error(`ElevenLabs Error ${res.status}`);
+  if (!res.ok) throw new Error(`ElevenLabs Error ${res.status}: ${await res.text()}`);
   return res.arrayBuffer();
 }
 
@@ -47,7 +47,7 @@ async function callFishSpeech(apiKey: string, voice: string, text: string, endpo
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
     body: JSON.stringify({ text, reference_id: voice, format: 'mp3', mp3_bitrate: 128 }),
   });
-  if (!res.ok) throw new Error(`Fish Speech Error ${res.status}`);
+  if (!res.ok) throw new Error(`Fish Speech Error ${res.status}: ${await res.text()}`);
   return res.arrayBuffer();
 }
 
@@ -64,7 +64,7 @@ async function callAzureTTS(apiKey: string, voice: string, text: string): Promis
     },
     body: ssml,
   });
-  if (!res.ok) throw new Error(`Azure TTS Error ${res.status}`);
+  if (!res.ok) throw new Error(`Azure TTS Error ${res.status}: ${await res.text()}`);
   return res.arrayBuffer();
 }
 
@@ -78,7 +78,7 @@ async function callGoogleTTS(apiKey: string, voice: string, text: string, speed:
       audioConfig: { audioEncoding: 'MP3', speakingRate: speed },
     }),
   });
-  if (!res.ok) throw new Error(`Google TTS Error ${res.status}`);
+  if (!res.ok) throw new Error(`Google TTS Error ${res.status}: ${await res.text()}`);
   const data = await res.json();
   const bin = atob(data.audioContent);
   const bytes = new Uint8Array(bin.length);
@@ -98,7 +98,7 @@ async function callCartesia(apiKey: string, voice: string, text: string, speed: 
       speed,
     }),
   });
-  if (!res.ok) throw new Error(`Cartesia Error ${res.status}`);
+  if (!res.ok) throw new Error(`Cartesia Error ${res.status}: ${await res.text()}`);
   return res.arrayBuffer();
 }
 
@@ -141,74 +141,137 @@ async function callNovelAITTS(email: string, password: string, voice: string, te
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
     body: JSON.stringify({ text, voice: voice || 'Aini', seed: -1, opus: false, version: 'v2' }),
   });
-  if (!res.ok) throw new Error(`NovelAI TTS Error ${res.status}`);
+  if (!res.ok) throw new Error(`NovelAI TTS Error ${res.status}: ${await res.text()}`);
   return res.arrayBuffer();
 }
 
 /**
- * Custom TTS — supports the Chatterbox ngrok/Colab server format.
+ * Custom / Remote TTS — works with Kaggle/Colab servers:
  *
- * The Chatterbox bridge server exposes:
- *   POST <base_url>/tts   { text, language?, exaggeration?, cfg_weight?, auto_emotion? }
- *   → raw WAV bytes (Content-Type: audio/wav)
+ *   Qwen3-TTS      → POST /tts  { text, speaker }
+ *   GPT-SoVITS     → POST /tts  { text, language }
+ *   Fish S2 Pro    → POST /tts  { text }
+ *   IndexTTS       → POST /tts  { text }
+ *   Chatterbox     → POST /tts  { text, auto_emotion, language? }
+ *   Any OpenAI TTS → POST /tts  { text }
  *
- * The user pastes the base ngrok URL (e.g. https://xxxx.ngrok-free.app) into the
- * "Custom Endpoint URL" field — we append /tts ourselves.
+ * The "Voice / Reference ID" settings field is sent as:
+ *   - speaker name  if it looks like a name  (e.g. "Vivian", "speaker_0")
+ *   - language code if it looks like one     (e.g. "en", "zh", "ja", "en-US")
  *
- * The "Voice / Reference ID" field is ignored by Chatterbox (reference audio is
- * configured server-side), but we accept it as an optional language override
- * (e.g. "en", "es") so the user can control language from the UI.
+ * Paste your bare ngrok URL — /tts is appended automatically.
  */
 async function callCustomTTS(
   endpoint: string,
   apiKey: string,
   voice: string,
   text: string,
+  speed: number,
 ): Promise<ArrayBuffer> {
-  // Strip trailing slash so we can reliably append /tts
-  const base = endpoint.replace(/\/+$/, '');
+  if (!endpoint || !endpoint.trim()) {
+    throw new Error('Custom TTS: no endpoint URL configured. Paste your ngrok URL in Settings → TTS → Custom Endpoint URL.');
+  }
 
-  // Decide the target URL:
-  // If the user already typed a full path ending in /tts (or /tts/), use as-is.
-  // Otherwise append /tts — this handles the common case of pasting the bare ngrok URL.
-  const url = /\/tts\/?$/.test(base) ? base : `${base}/tts`;
+  const base = endpoint.trim().replace(/\/+$/, '');
 
-  // Build request body — Chatterbox format
-  // "voice" field is re-used as language code if it looks like a BCP-47 tag (2-3 chars)
-  const isLangCode = voice && /^[a-z]{2,3}(-[A-Z]{2})?$/.test(voice.trim());
-  const body: Record<string, unknown> = {
-    text,
-    auto_emotion: true,
-  };
-  if (isLangCode) body.language = voice.trim();
+  // Append /tts only if the URL has no path beyond the hostname
+  let url: string;
+  try {
+    const parsed = new URL(base);
+    url = (parsed.pathname === '/' || parsed.pathname === '')
+      ? `${base}/tts`
+      : base;
+  } catch {
+    url = `${base}/tts`;
+  }
+
+  // Determine whether the voice field is a language code or a speaker name.
+  // Language codes: 2-3 alpha chars, optionally followed by -XX  (en, zh, ja, en-US, zh-CN)
+  // Speaker names: anything else                                   (Vivian, speaker_0, …)
+  const trimmedVoice = (voice || '').trim();
+  const isLangCode = /^[a-zA-Z]{2,3}(-[a-zA-Z]{2,4})?$/.test(trimmedVoice);
+
+  // Build a body compatible with the widest range of remote TTS servers.
+  // We include BOTH speaker and language when possible — servers ignore what they don't use.
+  const body: Record<string, unknown> = { text };
+
+  if (trimmedVoice) {
+    if (isLangCode) {
+      body.language = trimmedVoice;
+      // Chatterbox also accepts language this way
+      body.auto_emotion = true;
+    } else {
+      // Qwen3-TTS uses "speaker"; GPT-SoVITS bridges often use "speaker" too
+      body.speaker = trimmedVoice;
+    }
+  }
+
+  // Only include speed if meaningful — most servers don't support it
+  if (speed && speed !== 1.0) {
+    body.speed = speed;
+  }
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    // ngrok free tier requires this header to bypass the browser-warning page
+    // Bypass ngrok's browser-warning interstitial page
     'ngrok-skip-browser-warning': 'true',
+    'User-Agent': 'Mozilla/5.0 (compatible; AI-Companion/1.0)',
   };
-  // Only add Authorization if an API key was actually provided
-  if (apiKey && apiKey.trim() && apiKey.trim().toLowerCase() !== 'none') {
-    headers['Authorization'] = `Bearer ${apiKey.trim()}`;
+
+  // Only add Authorization when the user actually configured a key
+  const trimmedKey = (apiKey || '').trim();
+  if (trimmedKey && trimmedKey.toLowerCase() !== 'none') {
+    headers['Authorization'] = `Bearer ${trimmedKey}`;
   }
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+  } catch (networkErr: any) {
+    throw new Error(
+      `Custom TTS network error — could not reach ${url}.\n` +
+      `Make sure the ngrok tunnel is running and the URL is correct.\n` +
+      `Details: ${networkErr.message}`
+    );
+  }
 
   if (!res.ok) {
-    const errText = await res.text().catch(() => '');
-    throw new Error(`Custom TTS Error ${res.status}${errText ? ': ' + errText.slice(0, 200) : ''}`);
+    let errBody = '';
+    try { errBody = await res.text(); } catch {}
+    throw new Error(
+      `Custom TTS HTTP ${res.status} from ${url}` +
+      (errBody ? `\n${errBody.slice(0, 400)}` : '')
+    );
   }
 
-  return res.arrayBuffer();
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  const buffer = await res.arrayBuffer();
+
+  if (buffer.byteLength === 0) {
+    throw new Error(`Custom TTS: server at ${url} returned an empty response.`);
+  }
+
+  // If the server returned HTML (e.g. ngrok warning page leaked through despite the header),
+  // surface a useful error instead of passing garbage to AudioContext.decodeAudioData.
+  if (contentType.includes('text/html')) {
+    const preview = new TextDecoder().decode(buffer.slice(0, 300));
+    throw new Error(
+      `Custom TTS: got an HTML page instead of audio from ${url}.\n` +
+      `This usually means the ngrok-skip-browser-warning header was ignored.\n` +
+      `Try opening the URL directly in a browser tab first.\n` +
+      `Preview: ${preview}`
+    );
+  }
+
+  return buffer;
 }
 
 export function playAudioBuffer(buffer: ArrayBuffer): Promise<void> {
   return new Promise((resolve, reject) => {
-    // Guard against SSR and browsers where AudioContext is unavailable
     if (typeof window === 'undefined') { resolve(); return; }
 
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -227,7 +290,6 @@ export function playAudioBuffer(buffer: ArrayBuffer): Promise<void> {
       return;
     }
 
-    // Firefox requires a user-gesture to resume AudioContext
     const resume = ctx.state === 'suspended' ? ctx.resume() : Promise.resolve();
 
     resume.then(() => {
@@ -240,7 +302,13 @@ export function playAudioBuffer(buffer: ArrayBuffer): Promise<void> {
           source.start(0);
           source.onended = () => { ctx.close(); resolve(); };
         },
-        (err) => { ctx.close(); reject(err); },
+        (err) => {
+          ctx.close();
+          reject(new Error(
+            `AudioContext failed to decode the audio buffer. ` +
+            `The server may have returned a non-audio response. Details: ${err}`
+          ));
+        },
       );
     }).catch((err) => { ctx.close(); reject(err); });
   });
@@ -248,9 +316,9 @@ export function playAudioBuffer(buffer: ArrayBuffer): Promise<void> {
 
 export const ELEVENLABS_MODELS = [
   { id: 'eleven_monolingual_v1', name: 'Monolingual v1' },
-  { id: 'eleven_flash_v2_5', name: 'Flash v2.5' },
-  { id: 'eleven_turbo_v2_5', name: 'Turbo v2.5' },
-  { id: 'eleven_turbo_v2', name: 'Turbo v2' },
+  { id: 'eleven_flash_v2_5',     name: 'Flash v2.5' },
+  { id: 'eleven_turbo_v2_5',     name: 'Turbo v2.5' },
+  { id: 'eleven_turbo_v2',       name: 'Turbo v2' },
   { id: 'eleven_multilingual_v2', name: 'Multilingual v2' },
-  { id: 'eleven_v3', name: 'Eleven v3' },
+  { id: 'eleven_v3',             name: 'Eleven v3' },
 ];
